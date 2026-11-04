@@ -1,0 +1,27 @@
+[Unit]
+Description=RHEL MCP server ({{ mcp_site_role }} site {{ inventory_hostname }})
+Documentation=https://github.com/rhel-lightspeed/linux-mcp-server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+# --network host          the MCP serves streamable HTTP directly on the host
+# --pull=never            the image is already in the site's local podman
+#                         store; never reach for a registry
+# --userns=keep-id        container uid 1001 == host uid 1001 (the deploy
+#                         user), so the mounted SSH key stays readable
+# :z                      SELinux relabel of the mounted key directory
+# /var/lib/mcp/.config    the authorization policy — over HTTP the server
+#                         denies every tool call that no rule matches
+ExecStart=/usr/bin/podman run --rm --name {{ mcp_container_name }} --pull=never --network host --userns=keep-id:uid={{ mcp_container_uid }},gid={{ mcp_container_gid }} -v {{ mcp_key_dir }}:/var/lib/mcp/.ssh:z -v {{ mcp_config_dir }}:/var/lib/mcp/.config:z -e LINUX_MCP_USER={{ ansible_user }} -e LINUX_MCP_SSH_KEY_PATH=/var/lib/mcp/.ssh/{{ mcp_ssh_key_name }} -e LINUX_MCP_KNOWN_HOSTS_PATH=/var/lib/mcp/.ssh/{{ mcp_known_hosts_name }} -e LINUX_MCP_POLICY_PATH=/var/lib/mcp/.config/{{ mcp_policy_name }} -e LINUX_MCP_TRANSPORT=streamable-http -e LINUX_MCP_HOST={{ mcp_bind_address }} -e LINUX_MCP_PORT={{ mcp_port }} -e LINUX_MCP_PATH={{ mcp_path }} {{ mcp_image }}
+ExecStop=/usr/bin/podman stop -t 15 {{ mcp_container_name }}
+ExecStopPost=/usr/bin/podman rm -f {{ mcp_container_name }}
+
+[Install]
+WantedBy=default.target

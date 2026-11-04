@@ -1,0 +1,26 @@
+# Authorization policy for Red Hat's linux-mcp-server.
+#
+# Site: {{ mcp_site_role }} ({{ inventory_hostname }})
+#
+# Over an HTTP transport the server evaluates EVERY tool call against this
+# policy. If no rule matches, the call is denied — there is no implicit
+# "allow" over HTTP (that behaviour only exists for the stdio transport).
+#
+# `ssh_default` means: use the SSH user and key configured through
+# LINUX_MCP_USER / LINUX_MCP_SSH_KEY_PATH, which the systemd unit sets per
+# site (rhai on PROD, dr on DR).
+#
+# `host: "*"` allows remote inspection of any host the container can reach.
+# Local execution (a tool call with no `host` argument) is NOT covered by
+# this rule and is additionally blocked inside the container by the upstream
+# Containerfile, which sets `ENV container=docker`.
+#
+# The `-<tool>` syntax is the upstream deny list: add e.g. "-read_file" to
+# exclude a tool from the wildcard. Every upstream tool is read-only, so the
+# demo allows all of them.
+rules:
+  - host: "*"
+    tools:
+      - "*"
+    action: ssh_default
+    all_users: true

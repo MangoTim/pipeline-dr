@@ -1,0 +1,18 @@
+---
+# Deploy the RHEL MCP server to every site in the inventory.
+#
+# The SAME image tarball (built and scanned once by the pipeline) is copied to
+# every site and loaded there. The DR site therefore never depends on the PROD
+# registry — the artifact travels with the pipeline, which is what a real DR
+# promotion looks like.
+#
+# Required extra vars:
+#   -e mcp_image=rhel-mcp:v1.0.28102601
+#   -e mcp_artifact=/path/on/controller/rhel-mcp-v1.0.28102601.tar.gz
+
+- name: Deploy the RHEL MCP server to all sites
+  hosts: mcp_sites
+  gather_facts: true
+  become: false
+  roles:
+    - role: mcp

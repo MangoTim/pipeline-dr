@@ -1,0 +1,209 @@
+---
+# Deploy Red Hat's linux-mcp-server onto one site.
+#
+# Design notes:
+#   * No `become` anywhere. Each site is driven as its own non-root user
+#     (rhai on PROD, dr on DR) with rootless podman, so no sudo password is
+#     needed and `dr` does not need to be in the wheel group.
+#   * The container runs with `--userns=keep-id:uid=1001,gid=1001`, which maps
+#     container uid 1001 to host uid 1001 — the deploy user — so the mounted
+#     SSH key (mode 0600, owned by that user) is readable from inside.
+#   * The key lives in a DEDICATED directory, not ~/.ssh: the `:z` SELinux
+#     relabel required for the bind mount would otherwise change the context
+#     of the host's own authorized_keys and break the host's SSH logins.
+#   * The keypair is generated ON the site and the public half is added to the
+#     deploy user's authorized_keys, so no secret travels from the controller.
+#   * The MCP container inspects THIS host over SSH (the upstream image sets
+#     `container=docker`, which deliberately disables local execution). That is
+#     Red Hat's intended usage: the MCP reports on the real RHEL box.
+
+- name: Ensure the deploy user's SSH directory exists
+  ansible.builtin.file:
+    path: "{{ ansible_user_dir }}/.ssh"
+    state: directory
+    mode: "0700"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+
+- name: Ensure the MCP key directory exists
+  ansible.builtin.file:
+    path: "{{ mcp_key_dir }}"
+    state: directory
+    mode: "0700"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+
+- name: Generate the SSH key the MCP container uses to reach this host
+  ansible.builtin.command:
+    cmd: >-
+      ssh-keygen -t rsa -b {{ mcp_key_bits }}
+      -f {{ mcp_key_dir }}/{{ mcp_ssh_key_name }} -N "" -C "mcp@{{ inventory_hostname }}"
+  args:
+    creates: "{{ mcp_key_dir }}/{{ mcp_ssh_key_name }}"
+
+- name: Restrict the MCP private key
+  ansible.builtin.file:
+    path: "{{ mcp_key_dir }}/{{ mcp_ssh_key_name }}"
+    mode: "0600"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+
+- name: Authorise the MCP key for this site
+  ansible.builtin.shell: |
+    set -eu
+    pub="{{ mcp_key_dir }}/{{ mcp_ssh_key_name }}.pub"
+    auth="{{ ansible_user_dir }}/.ssh/authorized_keys"
+    touch "$auth"
+    if grep -qF -f "$pub" "$auth"; then
+      echo "ALREADY_AUTHORISED"
+    else
+      cat "$pub" >> "$auth"
+      echo "ADDED"
+    fi
+  args:
+    executable: /bin/bash
+  register: mcp_authorise
+  changed_when: "'ADDED' in mcp_authorise.stdout"
+
+- name: Restrict the authorized_keys file
+  ansible.builtin.file:
+    path: "{{ ansible_user_dir }}/.ssh/authorized_keys"
+    mode: "0600"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+
+- name: Apply the SELinux context to the SSH directory
+  ansible.builtin.command:
+    cmd: restorecon -R -v {{ ansible_user_dir }}/.ssh
+  register: mcp_restorecon
+  changed_when: false
+  failed_when: false
+
+- name: Pin this host's key for the MCP's SSH client
+  ansible.builtin.shell: |
+    set -eu
+    ssh-keyscan -T 5 {{ mcp_target_host }} 2>/dev/null > {{ mcp_key_dir }}/{{ mcp_known_hosts_name }}
+    test -s {{ mcp_key_dir }}/{{ mcp_known_hosts_name }}
+  args:
+    executable: /bin/bash
+  changed_when: true
+
+- name: Ensure the MCP config directory exists
+  ansible.builtin.file:
+    path: "{{ mcp_config_dir }}"
+    state: directory
+    mode: "0700"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+
+- name: Install the MCP authorization policy
+  ansible.builtin.template:
+    src: policy.yaml.j2
+    dest: "{{ mcp_config_dir }}/{{ mcp_policy_name }}"
+    mode: "0600"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+
+- name: Copy the built image to the site
+  ansible.builtin.copy:
+    src: "{{ mcp_artifact }}"
+    dest: "{{ ansible_user_dir }}/{{ mcp_artifact_remote }}"
+    mode: "0644"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+
+- name: Load the image into the site's rootless podman store
+  ansible.builtin.command:
+    cmd: podman load --input {{ ansible_user_dir }}/{{ mcp_artifact_remote }}
+  register: mcp_image_load
+  changed_when: "'Loaded image' in mcp_image_load.stdout"
+
+- name: Remove the image tarball (it is now in the local image store)
+  ansible.builtin.file:
+    path: "{{ ansible_user_dir }}/{{ mcp_artifact_remote }}"
+    state: absent
+
+- name: Ensure the systemd user unit directory exists
+  ansible.builtin.file:
+    path: "{{ ansible_user_dir }}/.config/systemd/user"
+    state: directory
+    mode: "0755"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+
+- name: Install the systemd user unit
+  ansible.builtin.template:
+    src: mcp.service.j2
+    dest: "{{ ansible_user_dir }}/.config/systemd/user/{{ mcp_service_name }}"
+    mode: "0644"
+
+- name: Reload the user systemd manager
+  ansible.builtin.command:
+    cmd: systemctl --user daemon-reload
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid | default(1001) }}"
+
+- name: Enable the MCP service
+  ansible.builtin.command:
+    cmd: systemctl --user enable {{ mcp_service_name }}
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid | default(1001) }}"
+  changed_when: false
+
+- name: Restart the MCP service
+  # A restart, not "enable --now": `enable --now` is a NO-OP when the unit is
+  # already active, so the container would keep running the PREVIOUS image
+  # even though the new one was just loaded into the site's store. `restart`
+  # stops the unit (ExecStopPost removes the container) and starts it again,
+  # which runs the new image.
+  ansible.builtin.command:
+    cmd: systemctl --user restart {{ mcp_service_name }}
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid | default(1001) }}"
+  register: mcp_service_start
+  changed_when: true
+
+- name: Wait for the MCP endpoint to accept connections
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ mcp_port }}"
+    timeout: "{{ mcp_readiness_seconds }}"
+    state: started
+
+- name: List the MCP images on the site
+  # The Go template placeholders are wrapped in {% raw %} so Ansible's own
+  # templating does not try to resolve "{{.Repository}}" as a variable.
+  ansible.builtin.command:
+    cmd: >-
+      podman images --format '{% raw %}{{.Repository}}:{{.Tag}}{% endraw %}'
+  register: mcp_local_images
+  changed_when: false
+
+- name: Remove the superseded MCP images
+  # Only the image this deployment just rolled out is kept. Without this, a
+  # site that is deployed to many times accumulates 325 MB per build.
+  # The old image can only be removed once the container using it is gone,
+  # which is why this runs after the restart above.
+  ansible.builtin.command:
+    cmd: podman rmi {{ item }}
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid | default(1001) }}"
+  loop: >-
+    {{ mcp_local_images.stdout_lines
+       | difference([mcp_image_ref])
+       | select('search', '^' ~ mcp_image_repo ~ '[:\-]')
+       | list }}
+  loop_control:
+    label: "{{ item }}"
+  # rmi refuses to remove an image that a running container still uses; that
+  # is the safe outcome, not an error.
+  failed_when: false
+  changed_when: "'Deleted:' in (item.stdout | default(''))"
+
+- name: Report what was deployed
+  ansible.builtin.debug:
+    msg:
+      - "site            : {{ mcp_site_role }} ({{ inventory_hostname }})"
+      - "image           : {{ mcp_image }}"
+      - "endpoint        : http://{{ inventory_hostname }}:{{ mcp_port }}{{ mcp_path }}"
+      - "inspected host  : {{ mcp_target_host }} (via SSH as {{ ansible_user }})"

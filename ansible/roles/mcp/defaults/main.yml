@@ -1,0 +1,69 @@
+---
+# Defaults for the RHEL MCP role.
+
+# The image reference as built and scanned by the pipeline. The pipeline
+# passes the exact tag it built, e.g. -e mcp_image=rhel-mcp:v1.0.29102601.
+mcp_image: "rhel-mcp:latest"
+
+# Podman normalises a short image name into the "localhost/" registry, so the
+# tag that actually lands in the site's local store is "localhost/<name>".
+# mcp_image_ref is the one image the site must KEEP; mcp_image_repo matches
+# every MCP image on the site, so the superseded ones can be removed.
+mcp_image_ref: "localhost/{{ mcp_image }}"
+mcp_image_repo: "localhost/rhel-mcp"
+
+# Path (on the Ansible controller) of the `podman save` tarball produced by the
+# pipeline. The role copies this exact file to every site, so both sites run
+# byte-identical content.
+mcp_artifact: ""
+mcp_artifact_remote: "rhel-mcp-image.tar.gz"
+
+# Container / service naming.
+mcp_container_name: rhel-mcp
+mcp_service_name: rhel-mcp.service
+
+# Network. The MCP speaks streamable HTTP on this port.
+mcp_port: 8095
+mcp_path: /mcp
+mcp_bind_address: "0.0.0.0"
+
+# The container runs as uid 1001 — the SAME uid as the deploy user on both
+# sites (rhai on PROD, dr on DR). That is what makes the mounted SSH key
+# readable: `--userns=keep-id:uid=1001,gid=1001` maps container uid 1001 to
+# host uid 1001.
+mcp_container_uid: 1001
+mcp_container_gid: 1001
+
+# SSH material for the MCP container.
+#
+# The keypair is generated ON THE SITE by this role (see tasks/main.yml) and
+# the public half is appended to the deploy user's authorized_keys. Nothing
+# secret ever travels from the controller, and each site gets its own
+# revocable key.
+#
+# The private key lives in a DEDICATED directory (NOT ~/.ssh) so that the `:z`
+# SELinux relabel needed for the bind mount never touches the host's own
+# authorized_keys.
+mcp_key_dir: "/home/{{ ansible_user }}/.mcp-keys"
+mcp_ssh_key_name: id_mcp
+mcp_known_hosts_name: known_hosts
+mcp_key_bits: 2048
+
+# Authorization policy. Over an HTTP transport the upstream server evaluates
+# EVERY tool call against this policy and denies anything that does not match
+# a rule — the "allow everything" behaviour only exists for the stdio
+# transport. The file is mounted read-only into the container and is the same
+# on both sites: `ssh_default` means "use the SSH user and key configured via
+# LINUX_MCP_USER / LINUX_MCP_SSH_KEY_PATH", which the unit sets per site.
+mcp_config_dir: "/home/{{ ansible_user }}/.mcp-config"
+mcp_policy_name: policy.yaml
+
+# The host the MCP inspects over SSH. It is the site itself: the container
+# runs with --network host, so it reaches the site's own sshd.
+mcp_target_host: "{{ ansible_host | default(inventory_hostname) }}"
+
+# Readiness.
+mcp_readiness_seconds: 90
+
+# Which site is this? Used for the site_role label and for the transcript.
+mcp_site_role: "{{ 'PROD' if 'mcp_prod' in group_names else 'DR' }}"

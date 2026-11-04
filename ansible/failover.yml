@@ -1,0 +1,57 @@
+---
+# FAILOVER: promote the DR site and stand the PROD site down.
+#
+# This is a real state change, not a routing trick:
+#   1. the PROD MCP container is stopped  -> the PROD endpoint goes away
+#   2. the DR MCP container is ensured up -> the DR endpoint answers
+#
+# After this playbook, a client that asks the DR site reports DR state.
+
+- name: Fail over from PROD to DR
+  hosts: mcp_prod
+  gather_facts: false
+  become: false
+  # The role is not used here, so its defaults (mcp_port, mcp_readiness_seconds,
+  # ...) are not loaded automatically. Pull them in explicitly.
+  vars_files:
+    - roles/mcp/defaults/main.yml
+  tasks:
+    - name: Stop the MCP server on the PROD site
+      ansible.builtin.command:
+        cmd: systemctl --user stop rhel-mcp.service
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid | default(1001) }}"
+      register: mcp_prod_stop
+      changed_when: mcp_prod_stop.rc == 0
+      failed_when: false
+
+    - name: Report the PROD endpoint state
+      ansible.builtin.debug:
+        msg: "PROD MCP stopped on {{ inventory_hostname }} (rc={{ mcp_prod_stop.rc | default('n/a') }})"
+
+- name: Promote the DR site
+  hosts: mcp_dr
+  gather_facts: false
+  become: false
+  vars_files:
+    - roles/mcp/defaults/main.yml
+  tasks:
+    - name: Ensure the MCP server is running on the DR site
+      ansible.builtin.command:
+        cmd: systemctl --user start rhel-mcp.service
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid | default(1001) }}"
+      register: mcp_dr_start
+      changed_when: mcp_dr_start.rc == 0
+      failed_when: false
+
+    - name: Wait for the DR endpoint to accept connections
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ mcp_port }}"
+        timeout: "{{ mcp_readiness_seconds }}"
+        state: started
+
+    - name: Report the DR endpoint state
+      ansible.builtin.debug:
+        msg: "DR MCP promoted on {{ inventory_hostname }} — the active site is now DR"

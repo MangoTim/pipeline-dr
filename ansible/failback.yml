@@ -1,0 +1,57 @@
+---
+# FAILBACK: return to the PROD site.
+#
+# The exact inverse of failover.yml:
+#   1. the DR MCP container is stopped
+#   2. the PROD MCP container is started again
+#
+# After this playbook, the PROD endpoint answers again.
+
+- name: Fail back from DR to PROD
+  hosts: mcp_dr
+  gather_facts: false
+  become: false
+  # The role is not used here, so its defaults (mcp_port, mcp_readiness_seconds,
+  # ...) are not loaded automatically. Pull them in explicitly.
+  vars_files:
+    - roles/mcp/defaults/main.yml
+  tasks:
+    - name: Stop the MCP server on the DR site
+      ansible.builtin.command:
+        cmd: systemctl --user stop rhel-mcp.service
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid | default(1001) }}"
+      register: mcp_dr_stop
+      changed_when: mcp_dr_stop.rc == 0
+      failed_when: false
+
+    - name: Report the DR endpoint state
+      ansible.builtin.debug:
+        msg: "DR MCP stopped on {{ inventory_hostname }} (rc={{ mcp_dr_stop.rc | default('n/a') }})"
+
+- name: Restore the PROD site
+  hosts: mcp_prod
+  gather_facts: false
+  become: false
+  vars_files:
+    - roles/mcp/defaults/main.yml
+  tasks:
+    - name: Ensure the MCP server is running on the PROD site
+      ansible.builtin.command:
+        cmd: systemctl --user start rhel-mcp.service
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid | default(1001) }}"
+      register: mcp_prod_start
+      changed_when: mcp_prod_start.rc == 0
+      failed_when: false
+
+    - name: Wait for the PROD endpoint to accept connections
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ mcp_port }}"
+        timeout: "{{ mcp_readiness_seconds }}"
+        state: started
+
+    - name: Report the PROD endpoint state
+      ansible.builtin.debug:
+        msg: "PROD MCP restored on {{ inventory_hostname }} — the active site is now PROD"
