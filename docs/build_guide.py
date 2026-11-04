@@ -785,10 +785,10 @@ TCP      0.0.0.0:8095                   LISTEN          users:(("linux-mcp-serve
 [probe]   RAM total     : 7.5 GiB
 [probe]   RAM available : 5.4 GiB  (72.2 % free)
 [probe] disk
-[probe]   /            xfs      25.4 GiB total     5.8 GiB used    19.6 GiB free  ( 77.2 % free)
+[probe]   /            xfs      25.4 GiB total     5.9 GiB used    19.5 GiB free  ( 76.8 % free)
 [probe]   (14 pseudo filesystems skipped — tmpfs, overlay, ... — only real ones are gated)
 
-[probe] READY: localhost.localdomain has 4 cores, 72.2 % memory free, 77.2 % disk free""")
+[probe] READY: localhost.localdomain has 4 cores, 72.2 % memory free, 76.8 % disk free (tightest: / (xfs))""")
     callout(doc, "IF THE GATE FAILS",
             "the drill is ABORTED. The standby goes back down, PROD keeps "
             "serving, and the step exits 1:",
@@ -967,7 +967,9 @@ PASS: both sites run the SAME image (ec616084ab36)
     h1(doc, "8.  The evidence a run leaves behind")
 
     p(doc, "Everything lands in manual-reports/ on the control plane. The "
-           "Jenkins job archives the same kind of file.")
+           "Jenkins job archives the same kind of file — build #11 on "
+           "2026-11-04 archived 14 of them and passed every gate, ending "
+           "with the transcript below.")
     table(doc,
           ["File", "What it is"],
           [["aqua-report.html", "the Aqua compliance report"],
@@ -984,17 +986,31 @@ PASS: both sites run the SAME image (ec616084ab36)
           widths=[2.4, 4.2])
 
     h2(doc, "The transcript")
+    p(doc, "This is the real transcript archived by Jenkins build #11, cut "
+           "down to the lines that carry the argument. The numbers are live "
+           "measurements, so they move a little from run to run.")
     code(doc, """===== PROD verification =====
 [verify] PASS: get_listening_ports reports '8095'
 [verify] PASS: http://192.168.147.105:8095/mcp is serving server-gateway.example.com
 
 ===== DR READINESS PROBE (before any cutover) =====
-[probe] READY: localhost.localdomain has 4 cores, 72.2 % memory free, 77.2 % disk free
+[probe] hostname        : localhost.localdomain
+[probe] CPU
+[probe]   logical cores : 4
+[probe] memory
+[probe]   RAM available : 5.4 GiB  (72.2 % free)
+[probe] disk
+[probe]   /            xfs      25.4 GiB total     5.9 GiB used    19.5 GiB free  ( 76.8 % free)
+[probe]   (14 pseudo filesystems skipped - tmpfs, overlay, ... - only real ones are gated)
+
+[probe] READY: localhost.localdomain has 4 cores, 72.2 % memory free, 76.8 % disk free (tightest: / (xfs))
 
 ===== FAILOVER: DR is now serving =====
+[verify] PASS: get_listening_ports reports '8095'
 [verify] PASS: http://192.168.147.104:8095/mcp is serving localhost.localdomain
 
 ===== FAILBACK: PROD is serving again =====
+[verify] PASS: get_listening_ports reports '8095'
 [verify] PASS: http://192.168.147.105:8095/mcp is serving server-gateway.example.com""")
 
     h2(doc, "The end state")
