@@ -254,12 +254,19 @@ curl -s -X POST http://192.168.147.105:8095/mcp \
 ### 3. Show that the artifact is identical on both sites
 
 ```bash
-ssh rhai@192.168.147.105 'podman image inspect localhost/rhel-mcp-remediated:v1.0.<tag> --format "Id={{.Id}} Digest={{.Digest}}"'
-ssh dr@192.168.147.104  'podman image inspect localhost/rhel-mcp-remediated:v1.0.<tag> --format "Id={{.Id}} Digest={{.Digest}}"'
+ssh rhai@192.168.147.105 'podman image inspect localhost/rhel-mcp-remediated:v1.0.<tag> --format "Id={{.Id}} Layers={{.RootFS.Layers}}"'
+ssh dr@192.168.147.104  'podman image inspect localhost/rhel-mcp-remediated:v1.0.<tag> --format "Id={{.Id}} Layers={{.RootFS.Layers}}"'
 ```
 
-Both sites print the **same image ID and the same digest**. Different hosts,
-byte-identical content.
+Both sites print the **same image ID** and **the same layer digests** —
+different hosts, byte-identical content.
+
+> The *manifest* digest (`{{.Digest}}`) can differ between the two sites,
+> and that is expected: each site's podman rebuilds the manifest when it
+> loads the tarball, and the two hosts do not run the same podman build
+> (`.105` has `4.9.4-rhel`, `.104` has `4.9.4-dev`). The image ID — the
+> hash of the image configuration — and the layer hashes are the content
+> identity, and those do match.
 
 ### 4. Ask the MCP a question (any MCP client)
 

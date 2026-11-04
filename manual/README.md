@@ -250,16 +250,26 @@ The exact inverse. PROD answers again.
 ./manual/remote-run.sh 13
 ```
 
-Both sites, different machines, the same image ID and the same digest:
+Both sites, different machines, the same image ID and the same layers:
 
 ```
-  site               image id       digest
-  ------------------ -------------- ----------------------------------------
-  192.168.147.105    f0909025c31a   sha256:...
-  192.168.147.104    f0909025c31a   sha256:...
+  192.168.147.105    image id  ec616084ab360b11f21b9d90a4ed825cd39d795770c43e67eceebf7253a946aa
+  192.168.147.104    image id  ec616084ab360b11f21b9d90a4ed825cd39d795770c43e67eceebf7253a946aa
 
-PASS: both sites run the SAME image (f0909025c31a)
+  layers (identical content, in order):
+       1  sha256:50830ca4b47aab8a2525635f36c715ec73d0f48c37549bdcdd6a5fb0cf4c354a
+       2  sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef
+       ...
+
+PASS: both sites run the SAME image (ec616084ab36)
+      and every one of its layers is byte-identical
 ```
+
+The *manifest* digest is reported but is not a gate: each site's podman
+rebuilds the manifest when it loads the tarball, and the two hosts do not
+run the same podman build (`.105` has `4.9.4-rhel`, `.104` has
+`4.9.4-dev`), so the manifest bytes — and their hash — differ even though
+every layer is identical.
 
 That is what makes the failover meaningful: the same bytes, a different
 answer.
