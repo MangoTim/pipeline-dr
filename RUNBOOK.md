@@ -248,3 +248,43 @@ for f in /tmp/shblocks/shblock_*.sh; do bash -n "$f" || echo "FAIL $f"; done
 
 `/tmp/ExtractShBlocks.groovy` renders every `sh` block through a
 `GroovyShell` and writes out exactly what Jenkins would write to disk.
+
+---
+
+## 8. The manual path — the pipeline, one step at a time
+
+[`manual/README.md`](manual/README.md) has the full guide. The short version:
+
+```bash
+# from the laptop
+cd products/mcp-dr-pipeline
+./manual/remote-run.sh list     # the steps
+./manual/remote-run.sh 03        # copy the repo to .105 and run that step
+./manual/remote-run.sh all       # every step, in order
+```
+
+The steps run on `.105` as `rhai` with **rootless** podman, so they need
+nothing from the Jenkins container — except the Aqua credential:
+
+```bash
+# on .105, as rhai
+mkdir -p ~/.mcp-demo && umask 077
+cat > ~/.mcp-demo/aqua.env <<'EOF'
+AQUA_USER=administrator
+AQUA_PASSWORD=<the aqua console password>
+EOF
+```
+
+The file is outside the repository on purpose — the Jenkins job takes the
+same credential from its own credential store (`aqua-console`).
+
+One difference worth knowing: the Jenkins container has the **root** podman
+socket mounted at `/var/run/docker.sock`, while the manual path runs with
+rootless podman and therefore starts the podman API service on demand:
+
+```bash
+podman system service --time=0 unix:///run/user/$(id -u)/podman/podman.sock
+```
+
+Both the Aqua and the Trivy scanner container mount whichever socket they
+find there.

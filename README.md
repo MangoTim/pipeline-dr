@@ -4,6 +4,8 @@ One pipeline builds and scans **one** image, Ansible deploys **that exact
 artifact** to a PROD and a DR site, and the MCP answers from whichever site
 is live — with a recorded transcript proving it.
 
+Repository: <https://github.com/MangoTim/pipeline-dr>
+
 ```
                          .105   PROD  (control plane)
    ┌──────────────────────────────────────────────────────────┐
@@ -83,6 +85,15 @@ products/mcp-dr-pipeline/
 │       └── templates/
 │           ├── mcp.service.j2    # the systemd USER unit
 │           └── policy.yaml.j2    # the MCP authorization policy
+├── manual/                       # the SAME pipeline, one step at a time
+│   ├── README.md                 # how to drive it by hand
+│   ├── env.sh                    # every host, port, image and version
+│   ├── lib.sh                    # the shared helpers
+│   ├── step-00-preflight.sh      # ... one script per pipeline stage
+│   ├── ...
+│   ├── step-13-show-same-artifact.sh
+│   ├── run-all.sh                # every step in order
+│   └── remote-run.sh             # laptop side: sync + run one step
 └── scripts/
     ├── mcp_verify.py             # MCP client: tools/list + get_system_information
     ├── trivy_cve_packages.py     # Trivy JSON -> pip upgrade list
@@ -170,6 +181,17 @@ The result: **19 → 0** HIGH/CRITICAL library CVEs, with the OS gate
 ---
 
 ## The 10-minute demo script
+
+> **Want to drive it by hand instead?** [`manual/`](manual/README.md) is the
+> same pipeline unbundled — one script per stage, so you can stop between
+> any two of them and explain what just happened. From the laptop:
+>
+> ```bash
+> ./manual/remote-run.sh list        # the steps
+> ./manual/remote-run.sh 03           # build the image on .105
+> ./manual/remote-run.sh 11           # the failover drill
+> ./manual/remote-run.sh all          # the whole thing
+> ```
 
 ### 0. Before you start (one-time, see RUNBOOK.md)
 
