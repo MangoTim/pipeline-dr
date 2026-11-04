@@ -65,14 +65,14 @@ ensure_ansible_on_path() {
 # The state file carries the values from one step to the next (the image
 # tag, the artifact name, ...), so every step can be run on its own.
 state_save() {
-    local tmp="${STATE_FILE}.tmp"
+    # usage: state_save KEY=VALUE [KEY=VALUE ...]
+    local tmp="${STATE_FILE}.tmp" entry key
     if [ -f "${STATE_FILE}" ]; then cp "${STATE_FILE}" "${tmp}"; else : > "${tmp}"; fi
-    while [ "$#" -ge 2 ]; do
-        local key="$1" val="$2"
+    for entry in "$@"; do
+        key="${entry%%=*}"
         grep -v "^${key}=" "${tmp}" > "${tmp}.2" || true
-        printf '%s=%s\n' "${key}" "${val}" >> "${tmp}.2"
+        printf '%s\n' "${entry}" >> "${tmp}.2"
         mv "${tmp}.2" "${tmp}"
-        shift 2
     done
     mv "${tmp}" "${STATE_FILE}"
     note "state -> ${STATE_FILE}"
