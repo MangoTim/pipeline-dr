@@ -306,6 +306,23 @@ cd products/mcp-dr-pipeline
 ./manual/remote-run.sh 12            # failback
 ./manual/remote-run.sh 13            # prove the same artifact on both sites""")
 
+    h2(doc, "The drill at a glance")
+    code(doc, """  move   PROD .105                        DR .104
+  ----   -----------------------------    -------------------------------
+   1     * live, :8095 answering           o stopped
+
+   2     * still serving -- warm it up -->  start the unit, wait for :8095
+
+   3     * still serving -- readiness -->  4 tools, gate on the numbers
+          (the gate runs WHILE             XX not ready -> abort,
+           PROD is serving)                 PROD keeps serving, step FAILS
+
+   4     * still serving -- THE CUTOVER->  start the unit
+          stop the PROD unit                :8095 now answers on .104
+
+   5     o stopped      -- VERIFY ----->   localhost.localdomain
+          :8095 refused                     8095 held by linux-mcp-server""")
+
     h2(doc, "The four moments worth stopping at")
     table(doc,
           ["When", "Say this", "Show this"],

@@ -486,6 +486,98 @@ cd ~/mcp-dr-pipeline
     # ------------------------------------------------------- the detail ---
     h1(doc, "6.  Every step, in detail")
 
+    # --- the whole picture, before the detail
+    h2(doc, "How the drill works, end to end")
+    p(doc, "Two diagrams. The first is the pipeline: one image is built and "
+           "scanned once, and the SAME tarball is shipped to both sites. The "
+           "second is the failover drill itself — five moves, and production "
+           "is never at risk until move four.")
+
+    code(doc, """BUILD ONCE, DEPLOY THE SAME BYTES TO BOTH SITES
+
+  .105  PROD  (control plane)                    .104  DR
+  -----------------------------------             -----------------------------------
+  Jenkins :8081
+    1 Checkout -> 2 Fetch MCP source -> 3 Version
+           |
+           v
+    4 podman build      Red Hat's own Containerfile, unmodified
+           |
+           v
+    5 Aqua scan ---GATE---> 6 Trivy (baseline: what to fix)
+                                    |
+                                    v
+                           7 Remediate   upgrade the packages,
+                                          drop pip -> a DERIVED image
+                                    |
+                                    v
+                           8 Trivy final ---GATE---> 9 Export
+                              0 HIGH/CRITICAL          rhel-mcp-...tar.gz
+                                                        |
+                          ONE tarball, ONE sha256      |
+             +------------------------------------------+
+             v
+  .105  PROD (rhai)                       .104  DR (dr)
+  +--------------------------+            +--------------------------+
+  | podman load              |            | podman load              |
+  | systemd --user unit      |            | systemd --user unit      |
+  | rhel-mcp :8095/mcp       |            | rhel-mcp :8095/mcp       |
+  |      |                   |            |      |                   |
+  |      +-- SSH --> .105    |            |      +-- SSH --> .104    |
+  |            sshd          |            |            sshd          |
+  +--------------------------+            +--------------------------+
+    same image, same bytes                   same image, same bytes
+    answers                                  answers
+    server-gateway.example.com               localhost.localdomain""",
+         caption="the pipeline, and where the two sites come from")
+
+    p(doc, "The container talks to ITS OWN host's sshd. That is what makes "
+           "the answer identify the site: the MCP inspects the machine it is "
+           "deployed on, so the same image gives a different answer on each "
+           "box.")
+
+    code(doc, """THE FAILOVER DRILL  (step 11 / the "Failover Drill" stage)
+
+  move   PROD .105                          DR .104
+  ----   --------------------------------   -----------------------------------
+   1     * live, :8095 answering             o stopped
+
+   2     * still serving  -- warm it up -->  start the unit
+          (production untouched)             wait for :8095 to accept
+
+   3     * still serving  -- readiness --->  get_system_information
+          the gate runs WHILE                get_cpu_information
+          PROD is serving                    get_memory_information
+                                             get_disk_usage
+                                          -> 4 cores, 72% RAM free, 77% disk free
+                                          OK  READY -> carry on
+                                          XX NOT READY -> abort: DR goes back
+                                             down, PROD keeps serving, the
+                                             step FAILS. The standby is never
+                                             promoted.
+
+   4     * still serving  -- THE CUTOVER ->  start the unit
+          stop the PROD unit                 :8095 now answers on .104
+
+   5     o stopped      -- VERIFY ------>  get_system_information
+          :8095 refused                      -> localhost.localdomain
+                                              get_listening_ports
+                                              -> 8095 held by linux-mcp-server""",
+         caption="the drill, move by move")
+
+    p(doc, "Move 5 is the proof, and it is two facts in one session: the "
+           "hostname says WHICH site is live, and the socket table says the "
+           "answer is real — the linux-mcp-server process really holds port "
+           "8095 on that host, so the hostname cannot have been a canned "
+           "string.")
+
+    callout(doc, "THE FAILBACK IS THE MIRROR",
+            "step 12 stops DR, starts PROD and verifies that .105 answers "
+            "server-gateway.example.com again. The pipeline deliberately ENDS "
+            "in that posture — PROD live, DR stopped — so the demo always "
+            "starts from a known state.",
+            "note")
+
     # --- 00
     step_header(doc, "00", "preflight", "manual/step-00-preflight.sh", "—")
     h3(doc, "What it does")

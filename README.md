@@ -275,6 +275,95 @@ wildcard rule.
 
 ---
 
+## How the PROD/DR drill works
+
+### The pipeline: build once, deploy the same bytes to both sites
+
+```
+  ┌──────────── .105  PROD  (control plane) ─────────────┐
+  │                                                      │
+  │   Jenkins :8081                                      │
+  │                                                      │
+  │     ① Checkout → ② Fetch MCP source → ③ Version      │
+  │            │                                         │
+  │            ▼                                         │
+  │     ④ podman build    (Red Hat's own Containerfile,   │
+  │                       unmodified)                    │
+  │            │                                         │
+  │            ▼                                         │
+  │     ⑤ Aqua scan ──GATE──► ⑥ Trivy (baseline)        │
+  │                                  │                   │
+  │                                  ▼                   │
+  │                        ⑦ Remediate  (upgrade the      │
+  │                            packages, drop pip →       │
+  │                            a DERIVED image)           │
+  │                                  │                   │
+  │                                  ▼                   │
+  │                        ⑧ Trivy final ──GATE──► ⑨ Export │
+  │                           0 HIGH/CRITICAL    rhel-mcp-…tgz│
+  └──────────────────────────────────────┬───────────────┘
+                                         │  ONE tarball, ONE sha256
+                        ┌────────────────┴─────────────────┐
+                        ▼                                  ▼
+          .105  PROD   (rhai)                  .104  DR   (dr)
+          ┌──────────────────────┐            ┌──────────────────────┐
+          │ podman load          │            │ podman load          │
+          │ systemd --user unit  │            │ systemd --user unit  │
+          │ rhel-mcp :8095/mcp   │            │ rhel-mcp :8095/mcp   │
+          │        │             │            │        │             │
+          │        └─ SSH ───────┼──► .105    │        └─ SSH ───────┼──► .104
+          │                      │   sshd     │                      │   sshd
+          └──────────────────────┘            └──────────────────────┘
+            same image, same bytes              same image, same bytes
+            answers                             answers
+            "server-gateway.example.com"       "localhost.localdomain"
+```
+
+The container talks to **its own host's sshd** — that is what makes the answer
+identify the site: the MCP inspects the machine it is deployed on, so the same
+image gives a different answer on each box.
+
+### The drill: five moves, production never at risk until move ④
+
+```
+  move   PROD .105                            DR .104
+  ────   ────────────────────────────         ────────────────────────────
+   ①     ● live, :8095 answering              ○ stopped
+
+   ②     ● still serving  ─── warm it up ──►  start the unit
+          (production untouched)               wait for :8095 to accept
+
+   ③     ● still serving  ── readiness ────►  get_system_information
+          the gate runs WHILE                  get_cpu_information
+          PROD is serving                      get_memory_information
+                                               get_disk_usage
+                                            → 4 cores · 72 % RAM free · 77 % disk free
+                                            ✔ READY → carry on
+                                            ✗ NOT READY → abort: DR goes back
+                                              down, PROD keeps serving, the step
+                                              FAILS. The standby is never promoted.
+
+   ④     ● still serving  ── THE CUTOVER ──►  start the unit
+          stop the PROD unit                   :8095 now answers on .104
+
+   ⑤     ○ stopped      ─── VERIFY ───────►  get_system_information
+          :8095 refused                        → localhost.localdomain
+                                               get_listening_ports
+                                               → 8095 held by linux-mcp-server
+```
+
+Move ⑤ is the proof, and it is two facts in one session: the hostname says
+*which* site is live, and the socket table says the answer is real — the
+`linux-mcp-server` process really holds port 8095 on that host, so the
+hostname cannot have been a canned string.
+
+**Failback (step 12)** is the mirror image: stop DR, start PROD, verify that
+`.105` answers `server-gateway.example.com` again. The pipeline deliberately
+*ends* in that posture — PROD live, DR stopped — so the demo always starts
+from a known state.
+
+---
+
 ## The 10-minute demo script
 
 > **Want to drive it by hand instead?** [`manual/`](manual/README.md) is the
@@ -388,6 +477,13 @@ ssh rhai@192.168.147.105 'systemctl --user stop rhel-mcp.service'
 
 Now `.105` refuses connections and `.104` is the only live site. Ask the MCP
 about the DR host — it answers. Ask it about the PROD host — it is down.
+
+> **Say this while you do it.** In production the client would keep the *same*
+> address across the cutover — a floating IP, or a DNS name that follows the
+> live site. This lab has the drill pass the new address to the caller
+> instead, because moving an address between hosts needs root on the target and
+> this demo never gives the deploy user root. The **service** really did move:
+> the unit is stopped on `.105` and running on `.104`.
 
 ```bash
 # fail back: stop DR, bring PROD up again
