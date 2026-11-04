@@ -1,0 +1,184 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; background: #FFFFFF; color: #1A1A1A;
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .sheet { padding: 34px 40px 30px; }
+  h1 {
+    font-size: 30px; font-weight: 700; color: #0B3D91; margin: 0 0 2px 0;
+    letter-spacing: -0.2px;
+  }
+  .sub { font-size: 15px; color: #555555; margin: 0 0 22px 0; }
+  .rule { height: 5px; background: #0B3D91; border-radius: 3px; margin: 0 0 22px 0; }
+  code, .mono { font-family: Consolas, "DejaVu Sans Mono", monospace; }
+
+  /* ---- boxes ---- */
+  .panel {
+    border: 1px solid #D5D5D5; border-radius: 10px; background: #FFFFFF;
+    box-shadow: 0 1px 3px rgba(0,0,0,.06);
+  }
+  .panel-head {
+    background: #0B3D91; color: #FFFFFF; border-radius: 9px 9px 0 0;
+    padding: 8px 14px; font-size: 13px; font-weight: 600; letter-spacing: .3px;
+  }
+  .panel-body { padding: 14px; }
+
+  .chip {
+    border: 1px solid #D5D5D5; border-radius: 8px; background: #FFFFFF;
+    padding: 8px 10px 9px 10px; position: relative; width: 302px;
+  }
+  .chip .n {
+    display: inline-block; width: 20px; height: 20px; border-radius: 50%;
+    background: #0B3D91; color: #FFFFFF; font-size: 11px; font-weight: 700;
+    text-align: center; line-height: 20px; margin-right: 6px;
+  }
+  .chip .t { font-size: 13.5px; font-weight: 600; color: #1A1A1A; }
+  .chip .c {
+    font-family: Consolas, monospace; font-size: 10.5px; color: #333333;
+    background: #F2F3F5; border-radius: 4px; padding: 4px 6px; margin-top: 6px;
+    line-height: 1.35; word-break: break-word;
+  }
+  .chip.gate { border-color: #1B6B3A; background: #E9F5EE; }
+  .chip.gate .n { background: #1B6B3A; }
+  .chip .gatebadge {
+    float: right; font-size: 9.5px; font-weight: 700; letter-spacing: .6px;
+    color: #1B6B3A; border: 1px solid #1B6B3A; border-radius: 3px;
+    padding: 1px 5px; margin-top: 2px;
+  }
+
+  .arrow { text-align: center; color: #0B3D91; font-size: 20px; line-height: 1;
+           margin: 8px 0; }
+
+  .site {
+    border: 1px solid #D5D5D5; border-radius: 10px; overflow: hidden; width: 640px;
+  }
+  .site .hd { padding: 8px 14px; color: #FFFFFF; font-size: 14px; font-weight: 600; }
+  .site.prod .hd { background: #0B3D91; }
+  .site.dr   .hd { background: #2C6E49; }
+  .site .bd { padding: 12px 14px 14px 14px; }
+  .row {
+    font-family: Consolas, monospace; font-size: 11.5px; color: #333333;
+    background: #F2F3F5; border-radius: 4px; padding: 5px 8px; margin-bottom: 6px;
+    line-height: 1.4;
+  }
+  .row .lbl { color: #555555; }
+  .answer {
+    font-size: 14px; font-weight: 600; color: #0B3D91; margin-top: 9px;
+    font-family: Consolas, monospace;
+  }
+  .site.dr .answer { color: #2C6E49; }
+
+  .note {
+    background: #EAF1F8; border-left: 4px solid #0B3D91; border-radius: 0 6px 6px 0;
+    padding: 9px 13px; font-size: 12.5px; color: #1A1A1A; line-height: 1.45;
+  }
+  .note b { color: #0B3D91; }
+
+
+  .jenkins {
+    border: 1px solid #D5D5D5; border-radius: 10px; overflow: hidden;
+  }
+  .jenkins .hd {
+    background: #0B3D91; color: #fff; padding: 9px 14px;
+    font-size: 14px; font-weight: 600;
+  }
+  .jenkins .hd .mono { color: #C8D8F0; font-weight: 400; font-size: 12px; }
+  .grid { display: flex; flex-wrap: wrap; gap: 12px; }
+  .artbar {
+    background: #E9F5EE; border: 1px solid #1B6B3A; border-radius: 8px;
+    padding: 10px 14px; text-align: center; font-size: 14px; font-weight: 600;
+    color: #1B6B3A; width: 640px;
+  }
+  .artbar .mono { display: block; font-size: 11.5px; font-weight: 400;
+                  color: #33503F; margin-top: 4px; }
+  .cols { display: flex; gap: 28px; justify-content: center; }
+  .sites { display: flex; gap: 28px; justify-content: center; margin-top: 10px; }
+</style></head>
+<body><div class="sheet">
+
+  <h1>PROD/DR MCP Pipeline</h1>
+  <div class="sub">One image, built and scanned once, deployed to two sites.
+     Every stage is a stage of the <span class="mono">Jenkinsfile</span>.</div>
+  <div class="rule"></div>
+
+  <div class="jenkins">
+    <div class="hd">Jenkins on .105 (control plane) &nbsp;&middot;&nbsp;
+      <span class="mono">Jenkinsfile</span></div>
+    <div class="panel-body">
+      <div class="grid">
+        <div class="chip"><div><span class="n">1</span><span class="t">Checkout</span></div><div class="c">git clone git://127.0.0.1:9418/
+ mcp-dr-pipeline.git</div></div>
+<div class="chip"><div><span class="n">2</span><span class="t">Fetch the MCP source</span></div><div class="c">curl -fsSL .../linux-mcp-server/
+ archive/6d7ca1d1....tar.gz</div></div>
+<div class="chip"><div><span class="n">3</span><span class="t">Resolve the version</span></div><div class="c">VERSION + date +%d%m%y
+ -&gt; v1.0.&lt;DDMMYY&gt;&lt;NN&gt;</div></div>
+<div class="chip"><div><span class="n">4</span><span class="t">Build the image</span></div><div class="c">podman build --file upstream/
+ Containerfile --format docker</div></div>
+<div class="chip gate"><span class="gatebadge">GATE</span><div><span class="n">5</span><span class="t">Aqua scan</span></div><div class="c">podman run ...scanner scan
+ --local ... | grep Compliant</div></div>
+<div class="chip"><div><span class="n">6</span><span class="t">Trivy scan (baseline)</span></div><div class="c">podman run ...trivy image
+ --scanners vuln --pkg-types library</div></div>
+<div class="chip"><div><span class="n">7</span><span class="t">Security remediation</span></div><div class="c">scripts/trivy_cve_packages.py
+ -&gt; Containerfile.remediated</div></div>
+<div class="chip gate"><span class="gatebadge">GATE</span><div><span class="n">8</span><span class="t">Trivy final scan</span></div><div class="c">trivy image --exit-code 1
+ -&gt; 0 HIGH / CRITICAL</div></div>
+<div class="chip"><div><span class="n">9</span><span class="t">Export the artifact</span></div><div class="c">podman save &lt;image&gt; | gzip
+ &gt; ....tar.gz ; sha256sum</div></div>
+<div class="chip"><div><span class="n">10</span><span class="t">Deploy to BOTH sites</span></div><div class="c">ansible-playbook -i inventory.ini
+ site.yml</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow">&#9660;</div>
+
+  <div style="display:flex; justify-content:center;">
+    <div class="artbar">
+      ONE tarball &middot; ONE sha256 &mdash; it travels as a file, not through a registry
+      <span class="mono">rhel-mcp-v1.0.&lt;DDMMYY&gt;&lt;NN&gt;.tar.gz</span>
+    </div>
+  </div>
+
+  <div class="arrow">&#9660;</div>
+
+  <div class="sites">
+    <div class="site prod">
+      <div class="hd">PROD &nbsp;&middot;&nbsp; 192.168.147.105 &nbsp;&middot;&nbsp; deploy user rhai</div>
+      <div class="bd">
+        <div class="row"><span class="lbl">load   </span>podman load --input rhel-mcp-....tar.gz</div>
+        <div class="row"><span class="lbl">run    </span>systemctl --user restart rhel-mcp.service</div>
+        <div class="row"><span class="lbl">serve  </span>rhel-mcp :8095/mcp &nbsp;(LINUX_MCP_HOST=0.0.0.0)</div>
+        <div class="row"><span class="lbl">ssh    </span>MCP --SSH--&gt; .105's own sshd (127.0.0.1)</div>
+        <div class="answer">answers: server-gateway.example.com</div>
+      </div>
+    </div>
+
+    <div class="site dr">
+      <div class="hd">DR &nbsp;&middot;&nbsp; 192.168.147.104 &nbsp;&middot;&nbsp; deploy user dr</div>
+      <div class="bd">
+        <div class="row"><span class="lbl">load   </span>podman load --input rhel-mcp-....tar.gz</div>
+        <div class="row"><span class="lbl">run    </span>systemctl --user restart rhel-mcp.service</div>
+        <div class="row"><span class="lbl">serve  </span>rhel-mcp :8095/mcp &nbsp;(LINUX_MCP_HOST=0.0.0.0)</div>
+        <div class="row"><span class="lbl">ssh    </span>MCP --SSH--&gt; .104's own sshd (127.0.0.1)</div>
+        <div class="answer">answers: localhost.localdomain</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow">&#9660;</div>
+
+  <div style="display:flex; justify-content:center;">
+    <div class="note" style="width:1308px;">
+      <b>The MCP inspects the host it is deployed on.</b> The upstream image sets
+      <span class="mono">ENV container=docker</span>, so the server refuses to run locally
+      and must reach a host over SSH &mdash; and it reaches <b>its own</b> host's sshd.
+      That is why the same bytes give a different answer on each site:
+      the answer is the live machine's real hostname, cores, RAM and disk,
+      read over SSH from the kernel &mdash; never a canned string.
+    </div>
+  </div>
+
+</div></body></html>

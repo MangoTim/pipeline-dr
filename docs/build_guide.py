@@ -197,6 +197,29 @@ def callout(doc, label: str, text: str, kind: str = "info") -> None:
     _no_space(para)
 
 
+def picture(doc, filename: str, caption: str | None = None,
+            width: float = 6.6) -> None:
+    """Drop in a rendered diagram PNG, scaled to the text column."""
+    path = HERE / filename
+    if not path.exists():
+        raise SystemExit(
+            f"{filename} is missing — run `python docs/build_diagrams.py` first")
+    if caption:
+        cap = doc.add_paragraph()
+        cap.paragraph_format.space_before = Pt(4)
+        cap.paragraph_format.space_after = Pt(2)
+        run = cap.add_run(caption)
+        run.font.size = Pt(9)
+        run.font.bold = True
+        run.font.color.rgb = GREY
+    para = doc.add_paragraph()
+    para.paragraph_format.space_before = Pt(2)
+    para.paragraph_format.space_after = Pt(10)
+    para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    para.add_run().add_picture(str(path), width=Inches(width))
+    _no_space(para)
+
+
 def table(doc, headers: list[str], rows: list[list[str]],
           widths: list[float] | None = None, mono_cols: list[int] | None = None) -> None:
     tbl = doc.add_table(rows=1, cols=len(headers))
@@ -493,6 +516,9 @@ cd ~/mcp-dr-pipeline
            "second is the failover drill itself — five moves, and production "
            "is never at risk until move four.")
 
+    picture(doc, "PROD-DR-Pipeline-Diagram.png",
+            caption="the pipeline, with the command behind every stage")
+
     code(doc, """BUILD ONCE, DEPLOY THE SAME BYTES TO BOTH SITES
 
   .105  PROD  (control plane)                    .104  DR
@@ -649,6 +675,10 @@ cd ~/mcp-dr-pipeline
             "ansible-playbook -i inventory.ini failback.yml\n"
             "-> ansible/failback.yml  (the exact mirror)"]],
           widths=[0.5, 1.4, 4.7], mono_cols=[2])
+
+    picture(doc, "PROD-DR-Drill-Diagram.png",
+            caption="the drill, with the command behind every move")
+
     p(doc, "Two details worth noticing. First, the verify and probe clients "
            "run INSIDE the container: the script is piped in on STDIN rather "
            "than bind-mounted, because podman runs on the host and cannot see "

@@ -95,11 +95,18 @@ products/mcp-dr-pipeline/
 │   ├── step-13-show-same-artifact.sh
 │   ├── run-all.sh                # every step in order
 │   └── remote-run.sh             # laptop side: sync + run one step
-└── scripts/
-    ├── mcp_verify.py             # MCP client: tools/list + get_system_information
-    ├── mcp_dr_probe.py           # MCP client: the DR readiness gate
-    ├── trivy_cve_packages.py     # Trivy JSON -> pip upgrade list
-    └── install-jenkins-tools.sh  # ansible + python3 into the Jenkins container
+├── scripts/
+│   ├── mcp_verify.py             # MCP client: tools/list + get_system_information
+│   ├── mcp_dr_probe.py           # MCP client: the DR readiness gate
+│   ├── trivy_cve_packages.py     # Trivy JSON -> pip upgrade list
+│   └── install-jenkins-tools.sh  # ansible + python3 into the Jenkins container
+└── docs/
+    ├── build_guide.py            # builds PROD-DR-MCP-Pipeline-Guide.docx
+    ├── build_cheatsheet.py       # builds PROD-DR-MCP-Pipeline-Cheatsheet.docx
+    ├── build_diagrams.py         # renders the two PNG diagrams below
+    ├── PROD-DR-Pipeline-Diagram.png   # the pipeline, with the command per stage
+    ├── PROD-DR-Drill-Diagram.png      # the drill, with the command per move
+    └── diagram-*.html            # the source of the two diagrams
 ```
 
 ---
@@ -279,6 +286,8 @@ wildcard rule.
 
 ### The pipeline: build once, deploy the same bytes to both sites
 
+![The PROD/DR pipeline — one image, built and scanned once, deployed to both sites](docs/PROD-DR-Pipeline-Diagram.png)
+
 ```
   ┌──────────── .105  PROD  (control plane) ─────────────┐
   │                                                      │
@@ -342,6 +351,8 @@ Every one of those is a stage in the `Jenkinsfile`, and every one of them has a
 script of its own in `manual/` (`step-00` … `step-13`) for the by-hand run.
 
 ### The drill: five moves, production never at risk until move ④
+
+![The failover drill — five moves, with the command behind each one](docs/PROD-DR-Drill-Diagram.png)
 
 ```
   move   PROD .105                            DR .104

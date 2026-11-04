@@ -1,0 +1,158 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; background: #FFFFFF; color: #1A1A1A;
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .sheet { padding: 34px 40px 30px; }
+  h1 {
+    font-size: 30px; font-weight: 700; color: #0B3D91; margin: 0 0 2px 0;
+    letter-spacing: -0.2px;
+  }
+  .sub { font-size: 15px; color: #555555; margin: 0 0 22px 0; }
+  .rule { height: 5px; background: #0B3D91; border-radius: 3px; margin: 0 0 22px 0; }
+  code, .mono { font-family: Consolas, "DejaVu Sans Mono", monospace; }
+
+  /* ---- boxes ---- */
+  .panel {
+    border: 1px solid #D5D5D5; border-radius: 10px; background: #FFFFFF;
+    box-shadow: 0 1px 3px rgba(0,0,0,.06);
+  }
+  .panel-head {
+    background: #0B3D91; color: #FFFFFF; border-radius: 9px 9px 0 0;
+    padding: 8px 14px; font-size: 13px; font-weight: 600; letter-spacing: .3px;
+  }
+  .panel-body { padding: 14px; }
+
+  .chip {
+    border: 1px solid #D5D5D5; border-radius: 8px; background: #FFFFFF;
+    padding: 8px 10px 9px 10px; position: relative; width: 302px;
+  }
+  .chip .n {
+    display: inline-block; width: 20px; height: 20px; border-radius: 50%;
+    background: #0B3D91; color: #FFFFFF; font-size: 11px; font-weight: 700;
+    text-align: center; line-height: 20px; margin-right: 6px;
+  }
+  .chip .t { font-size: 13.5px; font-weight: 600; color: #1A1A1A; }
+  .chip .c {
+    font-family: Consolas, monospace; font-size: 10.5px; color: #333333;
+    background: #F2F3F5; border-radius: 4px; padding: 4px 6px; margin-top: 6px;
+    line-height: 1.35; word-break: break-word;
+  }
+  .chip.gate { border-color: #1B6B3A; background: #E9F5EE; }
+  .chip.gate .n { background: #1B6B3A; }
+  .chip .gatebadge {
+    float: right; font-size: 9.5px; font-weight: 700; letter-spacing: .6px;
+    color: #1B6B3A; border: 1px solid #1B6B3A; border-radius: 3px;
+    padding: 1px 5px; margin-top: 2px;
+  }
+
+  .arrow { text-align: center; color: #0B3D91; font-size: 20px; line-height: 1;
+           margin: 8px 0; }
+
+  .site {
+    border: 1px solid #D5D5D5; border-radius: 10px; overflow: hidden; width: 640px;
+  }
+  .site .hd { padding: 8px 14px; color: #FFFFFF; font-size: 14px; font-weight: 600; }
+  .site.prod .hd { background: #0B3D91; }
+  .site.dr   .hd { background: #2C6E49; }
+  .site .bd { padding: 12px 14px 14px 14px; }
+  .row {
+    font-family: Consolas, monospace; font-size: 11.5px; color: #333333;
+    background: #F2F3F5; border-radius: 4px; padding: 5px 8px; margin-bottom: 6px;
+    line-height: 1.4;
+  }
+  .row .lbl { color: #555555; }
+  .answer {
+    font-size: 14px; font-weight: 600; color: #0B3D91; margin-top: 9px;
+    font-family: Consolas, monospace;
+  }
+  .site.dr .answer { color: #2C6E49; }
+
+  .note {
+    background: #EAF1F8; border-left: 4px solid #0B3D91; border-radius: 0 6px 6px 0;
+    padding: 9px 13px; font-size: 12.5px; color: #1A1A1A; line-height: 1.45;
+  }
+  .note b { color: #0B3D91; }
+
+
+  .dgrid {
+    display: grid; grid-template-columns: 1fr 268px 268px; gap: 0;
+    border: 1px solid #D5D5D5; border-radius: 10px; overflow: hidden;
+  }
+  .gh { padding: 8px 12px; color: #fff; font-size: 13.5px; font-weight: 700; }
+  .gh.m { background: #3C3C3C; }
+  .gh.p { background: #0B3D91; }
+  .gh.d { background: #2C6E49; }
+  .cell { padding: 12px; border-top: 1px solid #E4E4E4; }
+  .cell.p, .cell.d { border-left: 1px solid #E4E4E4; }
+
+  .move { display: flex; gap: 12px; }
+  .mnum {
+    flex: 0 0 30px; height: 30px; border-radius: 50%; background: #0B3D91;
+    color: #fff; font-size: 14px; font-weight: 700; text-align: center;
+    line-height: 30px;
+  }
+  .mnum.gate { background: #1B6B3A; }
+  .mbody { flex: 1; }
+  .mtitle { font-size: 14.5px; font-weight: 600; margin-bottom: 2px; }
+  .mwhat { font-size: 12px; color: #555555; margin-bottom: 7px; line-height: 1.4; }
+  .mcmd {
+    font-family: Consolas, monospace; font-size: 10.5px; line-height: 1.5;
+    background: #F2F3F5; border-radius: 5px; padding: 7px 9px; color: #2B2B2B;
+    white-space: pre-wrap;
+  }
+  .mcmd b { color: #0B3D91; }
+  .state { font-size: 12px; padding: 7px 9px; border-radius: 5px; line-height: 1.4; }
+  .state.live { background: #E9F5EE; color: #1B6B3A; font-weight: 600; }
+  .state.down { background: #FBECEC; color: #B30000; font-weight: 600; }
+  .state.warm { background: #EAF1F8; color: #0B3D91; font-weight: 600; }
+</style></head>
+<body><div class="sheet">
+
+  <h1>The failover drill</h1>
+  <div class="sub">Five moves. Production is never at risk until move&nbsp;4 &mdash;
+     the standby has to prove it can carry the load first.</div>
+  <div class="rule"></div>
+
+  <div class="dgrid">
+    <div class="gh m">WHAT HAPPENS &mdash; AND THE COMMAND THAT DOES IT</div>
+    <div class="gh p">PROD &middot; 192.168.147.105</div>
+    <div class="gh d">DR &middot; 192.168.147.104</div>
+    <div class="cell m"><div class="move"><div class="mnum">1</div><div class="mbody"><div class="mtitle">Warm the standby</div><div class="mwhat">Bring the DR MCP up while PROD keeps serving. <span class="mono">ansible/dr-warmup.yml</span></div><div class="mcmd"><b>ansible-playbook</b> -i inventory.ini dr-warmup.yml
+  -&gt; systemctl --user start rhel-mcp.service   (on .104)</div></div></div></div><div class="cell p"><div class="state live">&#9679; live<br>:8095 answering</div></div><div class="cell d"><div class="state down">&#9675; stopped</div></div>
+<div class="cell m"><div class="move"><div class="mnum gate">2</div><div class="mbody"><div class="mtitle">The readiness gate</div><div class="mwhat">Ask the standby what it can see of <i>itself</i>, through the MCP, before anything is cut over. <span class="mono">scripts/mcp_dr_probe.py</span></div><div class="mcmd"><b>podman run</b> -i --rm --network host &lt;image&gt; - \
+    --url http://192.168.147.104:8095/mcp \
+    --target 192.168.147.104 \
+    --expect localhost.localdomain ...
+  < scripts/mcp_dr_probe.py
+  get_system_information / get_cpu_information /
+  get_memory_information / get_disk_usage</div></div></div></div><div class="cell p"><div class="state live">&#9679; still serving<br><span style="font-weight:400">the gate runs WHILE production is up</span></div></div><div class="cell d"><div class="state warm">&#9679; started<br><span style="font-weight:400">4 cores &middot; 72 % RAM free &middot; 77 % disk free<br>&rarr; <b>READY</b> &nbsp;|&nbsp; not ready &rarr; abort, PROD untouched</span></div></div>
+<div class="cell m"><div class="move"><div class="mnum">3</div><div class="mbody"><div class="mtitle">The cutover</div><div class="mwhat">Stop the MCP on PROD, start it on DR. <span class="mono">ansible/failover.yml</span></div><div class="mcmd"><b>ansible-playbook</b> -i inventory.ini failover.yml
+  -&gt; systemctl --user stop  rhel-mcp.service   (on .105)
+  -&gt; systemctl --user start rhel-mcp.service   (on .104)</div></div></div></div><div class="cell p"><div class="state live">&#9679; still serving<br><span style="font-weight:400">until the unit is stopped</span></div></div><div class="cell d"><div class="state live">&#9679; live<br><span style="font-weight:400">:8095 now answers on .104</span></div></div>
+<div class="cell m"><div class="move"><div class="mnum gate">4</div><div class="mbody"><div class="mtitle">Verify the new live site</div><div class="mwhat">Two facts in one session: the hostname says <i>which</i> site is live, the socket table says the answer is real. <span class="mono">scripts/mcp_verify.py</span></div><div class="mcmd"><b>podman run</b> -i --rm --network host &lt;image&gt; - \
+    --url http://192.168.147.104:8095/mcp \
+    --expect localhost.localdomain \
+    --call get_listening_ports \
+    --assert get_listening_ports=8095
+  &lt; scripts/mcp_verify.py</div></div></div></div><div class="cell p"><div class="state down">&#9675; stopped<br>:8095 refused</div></div><div class="cell d"><div class="state live">&#9679; live<br><span style="font-weight:400">localhost.localdomain, and 8095 held by<br>linux-mcp-server</span></div></div>
+<div class="cell m"><div class="move"><div class="mnum">5</div><div class="mbody"><div class="mtitle">Fail back</div><div class="mwhat">The exact mirror: stop DR, start PROD, verify again. <span class="mono">ansible/failback.yml</span></div><div class="mcmd"><b>ansible-playbook</b> -i inventory.ini failback.yml
+  -&gt; systemctl --user stop  rhel-mcp.service   (on .104)
+  -&gt; systemctl --user start rhel-mcp.service   (on .105)</div></div></div></div><div class="cell p"><div class="state live">&#9679; live again<br><span style="font-weight:400">answers server-gateway.example.com</span></div></div><div class="cell d"><div class="state down">&#9675; stopped<br>:8095 refused</div></div>
+  </div>
+
+  <div style="height:16px"></div>
+  <div style="display:flex; justify-content:center;">
+    <div class="note" style="width:1300px;">
+      <b>The honest line.</b> The <b>service</b> moves for real: the unit is stopped on
+      one host and started on the other. The <b>client's address</b> is changed by the
+      caller &mdash; a floating IP would need <span class="mono">ip addr add</span>, i.e. root
+      on the target, and this demo never gives the deploy user root. Production DR does
+      it with VRRP/keepalived or pacemaker&nbsp;+&nbsp;corosync instead.
+    </div>
+  </div>
+
+</div></body></html>
