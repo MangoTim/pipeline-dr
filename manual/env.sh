@@ -25,6 +25,16 @@ MCP_PATH="/mcp"
 PROD_EXPECT="server-gateway.example.com"
 DR_EXPECT="localhost.localdomain"
 
+# --- the DR readiness gate ---------------------------------------------------
+# Before the drill promotes the DR site, the MCP asks it what it can see of
+# its own host. These are the minimums the standby must meet to be worth
+# failing over to. The lab boxes are identical, so these are deliberately
+# modest — they exist to catch a genuinely undersized or broken standby, not
+# to police every percentage point.
+DR_MIN_CPU_CORES="${DR_MIN_CPU_CORES:-2}"           # logical cores the DR host must have
+DR_MIN_FREE_MEM_PERCENT="${DR_MIN_FREE_MEM_PERCENT:-10}"   # % of RAM that must be available
+DR_MIN_FREE_DISK_PERCENT="${DR_MIN_FREE_DISK_PERCENT:-10}"  # % free on the TIGHTEST real filesystem
+
 # --- the upstream source ----------------------------------------------------
 MCP_REPO="rhel-lightspeed/linux-mcp-server"
 MCP_COMMIT="6d7ca1d1da8598c2e816fd69e98b8f7cf97da0d1"

@@ -1,0 +1,40 @@
+---
+# WARM THE DR STANDBY.
+#
+# Brings the DR site's MCP up and waits for it to accept connections, WITHOUT
+# touching PROD. The failover drill calls this FIRST, so the standby can be
+# health-checked while production is still serving.
+#
+# Why it matters: the readiness probe that follows talks to the DR endpoint
+# over MCP. If the standby is not up, there is nothing to ask, and the drill
+# would have no way to discover that DR is broken until after PROD had already
+# been taken down.
+#
+# Idempotent — `systemctl --user start` on an already-active unit is a no-op.
+
+- name: Warm the DR standby site
+  hosts: mcp_dr
+  gather_facts: false
+  become: false
+  vars_files:
+    - roles/mcp/defaults/main.yml
+  tasks:
+    - name: Ensure the MCP server is running on the DR site
+      ansible.builtin.command:
+        cmd: systemctl --user start rhel-mcp.service
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid | default(1001) }}"
+      register: mcp_dr_start
+      changed_when: mcp_dr_start.rc == 0
+      failed_when: false
+
+    - name: Wait for the DR endpoint to accept connections
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ mcp_port }}"
+        timeout: "{{ mcp_readiness_seconds }}"
+        state: started
+
+    - name: Report the standby state
+      ansible.builtin.debug:
+        msg: "DR standby warm on {{ inventory_hostname }} — production is untouched"

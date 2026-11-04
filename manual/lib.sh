@@ -131,13 +131,37 @@ ensure_podman_socket() {
 # STDIN rather than bind-mounted: podman runs on the host and cannot see a
 # path inside a container.
 verify_mcp() {
-    # usage: verify_mcp <url> <target-host> <expected-hostname> <image>
+    # usage: verify_mcp <url> <target-host> <expected-hostname> <image> [extra args...]
+    #
+    # Any extra args are passed straight to mcp_verify.py — that is how a
+    # step asks for MORE tools in the same session:
+    #
+    #   verify_mcp "$url" "$host" "$expect" "$image" \
+    #       --call get_listening_ports --assert get_listening_ports=8095
+    local url="$1" target="$2" expect="$3" image="$4"; shift 4
+    local rc=0
+    podman run -i --rm --pull=never --network host --security-opt label=disable \
+        --entrypoint /opt/venvs/mcp/bin/python \
+        "${image}" \
+        - --url "${url}" --target "${target}" --expect "${expect}" "$@" \
+        < "${WORKDIR}/scripts/mcp_verify.py" 2>&1 | tee -a "${TRANSCRIPT}" || rc=${PIPESTATUS[0]}
+    return "${rc}"
+}
+
+# Ask the MCP what the standby site can see of ITSELF and gate on the
+# numbers. This is the readiness check that makes the MCP load-bearing in the
+# failover drill: a standby that cannot hold the load is never promoted.
+probe_dr_readiness() {
+    # usage: probe_dr_readiness <url> <target-host> <expected-hostname> <image>
     local url="$1" target="$2" expect="$3" image="$4" rc=0
     podman run -i --rm --pull=never --network host --security-opt label=disable \
         --entrypoint /opt/venvs/mcp/bin/python \
         "${image}" \
         - --url "${url}" --target "${target}" --expect "${expect}" \
-        < "${WORKDIR}/scripts/mcp_verify.py" 2>&1 | tee -a "${TRANSCRIPT}" || rc=${PIPESTATUS[0]}
+          --min-cpu-cores "${DR_MIN_CPU_CORES}" \
+          --min-free-mem-percent "${DR_MIN_FREE_MEM_PERCENT}" \
+          --min-free-disk-percent "${DR_MIN_FREE_DISK_PERCENT}" \
+        < "${WORKDIR}/scripts/mcp_dr_probe.py" 2>&1 | tee -a "${TRANSCRIPT}" || rc=${PIPESTATUS[0]}
     return "${rc}"
 }
 

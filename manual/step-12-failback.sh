@@ -7,7 +7,9 @@
 #   1. the DR MCP container is stopped
 #   2. the PROD MCP container is started again
 #
-# After this the PROD endpoint answers again.
+# After this the PROD endpoint answers again. The listening-ports proof shows
+# the MCP process is back on 8095 on the PROD host — the same artifact, the
+# same socket, the original site.
 #
 #   ./manual/step-12-failback.sh
 # ---------------------------------------------------------------------------
@@ -37,6 +39,8 @@ verify_mcp \
     "${PROD_HOST}" \
     "${PROD_EXPECT}" \
     "${FULL_IMAGE}" \
+    --call get_listening_ports \
+    --assert "get_listening_ports=${MCP_PORT}" \
     || { echo "${C_RED}BLOCKED: after failback the PROD endpoint did not answer as ${PROD_EXPECT}${C_RESET}"; exit 1; }
 
 echo "" | tee -a "${TRANSCRIPT}"

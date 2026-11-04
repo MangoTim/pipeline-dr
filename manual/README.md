@@ -216,11 +216,24 @@ systemd **user** unit. No root, no sudo password, no shared filesystem.
 ./manual/remote-run.sh 10
 ```
 
-Asks the PROD endpoint who it is:
+Asks the PROD endpoint who it is — **and** proves it really reached the host:
 
 ```
+[verify] get_system_information(host=192.168.147.105) returned:
+{"hostname":"server-gateway.example.com", ...}
+...
+[verify] get_listening_ports(host=192.168.147.105) returned:
+=== Listening Ports ===
+TCP      0.0.0.0:8095                   LISTEN          users:(("linux-mcp-serve",pid=2150982,fd=8))
+...
+[verify] PASS: get_listening_ports reports '8095'
 [verify] PASS: http://192.168.147.105:8095/mcp is serving server-gateway.example.com
 ```
+
+Two different facts, one MCP session. The first says *which* site is answering;
+the second says the answer is real — the MCP process is actually holding port
+8095 on that host's socket table, so the hostname cannot have come from a
+canned string.
 
 ### 11 — failover
 
@@ -228,7 +241,43 @@ Asks the PROD endpoint who it is:
 ./manual/remote-run.sh 11
 ```
 
-Stops the PROD MCP, starts the DR one, and asks again:
+This is the step where the MCP earns its place. It does three things in order:
+
+1. **Warm the standby** — `dr-warmup.yml` starts the DR MCP and waits for the
+   port. PROD keeps serving throughout.
+2. **The readiness gate** — the MCP asks the DR site what it can see of
+   *itself*, and the answer is checked:
+
+```
+[probe] hostname        : localhost.localdomain
+[probe] CPU
+[probe]   logical cores : 4
+[probe] memory
+[probe]   RAM total     : 7.5 GiB
+[probe]   RAM available : 5.4 GiB  (72.2 % free)
+[probe] disk
+[probe]   /            xfs      25.4 GiB total     5.8 GiB used    19.6 GiB free  ( 77.2 % free)
+[probe]   (14 pseudo filesystems skipped — tmpfs, overlay, ... — only real ones are gated)
+
+[probe] READY: localhost.localdomain has 4 cores, 72.2 % memory free, 77.2 % disk free
+```
+
+   **If the probe fails, the drill is aborted** — the standby goes back down,
+   PROD keeps serving, and the step exits `1`:
+
+```
+[probe] NOT READY for failover:
+[probe]   - only 4 logical cores, need at least 64
+
+BLOCKED: the DR site is not fit to take over. Rolling back.
+...
+    PROD is still serving — production was never at risk.
+```
+
+   A standby that cannot hold the load is never promoted. That is the whole
+   reason for putting the MCP in front of the cutover.
+
+3. **The cutover** — stops the PROD MCP, promotes DR, and asks again:
 
 ```
 [verify] PASS: http://192.168.147.104:8095/mcp is serving localhost.localdomain
@@ -242,7 +291,8 @@ The PROD endpoint is now dead — the script shows that too.
 ./manual/remote-run.sh 12
 ```
 
-The exact inverse. PROD answers again.
+The exact inverse. PROD answers again, and the listening-ports proof shows the
+MCP process is back on 8095 on the PROD host.
 
 ### 13 — the evidence
 
@@ -297,7 +347,11 @@ The transcript is the same file the Jenkins job archives:
 
 ```
 ===== PROD verification =====
+[verify] PASS: get_listening_ports reports '8095'
 [verify] PASS: http://192.168.147.105:8095/mcp is serving server-gateway.example.com
+
+===== DR READINESS PROBE (before any cutover) =====
+[probe] READY: localhost.localdomain has 4 cores, 72.2 % memory free, 77.2 % disk free
 
 ===== FAILOVER: DR is now serving =====
 [verify] PASS: http://192.168.147.104:8095/mcp is serving localhost.localdomain

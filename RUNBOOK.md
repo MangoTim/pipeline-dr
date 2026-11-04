@@ -186,10 +186,16 @@ already exist — it is shared with the HKU intranet job.
 | 8 | Trivy Final Scan | **no HIGH/CRITICAL library CVEs, no CRITICAL OS CVEs** on the shipped image |
 | 9 | Export Artifact | `podman save \| gzip` + `sha256sum` |
 | 10 | Ansible Deploy | the SAME tarball to `.105` and `.104` |
-| 11 | Verify PROD | MCP answers `server-gateway.example.com` |
-| 12 | Failover Drill | PROD stopped → DR answers `localhost.localdomain` |
+| 11 | Verify PROD | MCP answers `server-gateway.example.com` **and** `get_listening_ports` shows 8095 held by the MCP process |
+| 12 | Failover Drill | the DR standby is warmed up, the **MCP readiness probe** must pass (cores / memory / disk), then PROD stopped → DR answers `localhost.localdomain` |
 | 13 | Failback | DR stopped → PROD answers `server-gateway.example.com` again |
 | 14 | Archive + Email | `failover-transcript.txt` + scan reports |
+
+> The **readiness gate** in stage 12 is the one with teeth. If the MCP reports
+> that the DR standby does not have the headroom to take production, the drill
+> is **aborted before production is touched**: the standby goes back down, PROD
+> keeps serving, and the build fails. The minimums live in `manual/env.sh` and
+> in the `environment` block of the Jenkinsfile.
 
 > The scan is deliberately **two-stage**: the first scan is a baseline that
 > tells the remediation what to fix, the second scan is the gate on what is

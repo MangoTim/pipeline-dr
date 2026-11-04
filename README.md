@@ -77,6 +77,7 @@ products/mcp-dr-pipeline/
 │   ├── ansible.cfg
 │   ├── inventory.ini             # [mcp_prod] .105 as rhai / [mcp_dr] .104 as dr
 │   ├── site.yml                  # deploy the artifact to every site
+│   ├── dr-warmup.yml             # start the DR standby, WITHOUT touching PROD
 │   ├── failover.yml              # stop PROD, promote DR
 │   ├── failback.yml              # stop DR, restore PROD
 │   └── roles/mcp/
@@ -96,6 +97,7 @@ products/mcp-dr-pipeline/
 │   └── remote-run.sh             # laptop side: sync + run one step
 └── scripts/
     ├── mcp_verify.py             # MCP client: tools/list + get_system_information
+    ├── mcp_dr_probe.py           # MCP client: the DR readiness gate
     ├── trivy_cve_packages.py     # Trivy JSON -> pip upgrade list
     └── install-jenkins-tools.sh  # ansible + python3 into the Jenkins container
 ```
@@ -177,6 +179,73 @@ image.
 
 The result: **19 → 0** HIGH/CRITICAL library CVEs, with the OS gate
 (no CRITICAL) unchanged.
+
+---
+
+## What the MCP actually does in this pipeline
+
+The MCP is not decoration in the middle of the pipeline — it is the thing
+that **decides whether the drill is allowed to happen**. Five of its 19 tools
+are load-bearing; the other fourteen are exposed and callable, but the demo
+does not need them.
+
+| Tool | Where it is used | What it proves that nothing else could |
+|---|---|---|
+| `get_system_information` | steps 10, 11, 12 | **Which site is live.** Same image, different hostname — the MCP answers from whichever host it is deployed on. This is the demo's punchline. |
+| `get_listening_ports` | steps 10, 11, 12 | **The answer is real.** Port 8095 on that host is held by the `linux-mcp-server` process, so the hostname cannot have come from a canned string. |
+| `get_cpu_information` | step 11 (readiness) | **Is the standby big enough?** The core count of the DR box, measured by the same tool that will later report on it in production. |
+| `get_memory_information` | step 11 (readiness) | **Is there room to run?** How much of the DR box's RAM is actually available, not what the spec sheet says. |
+| `get_disk_usage` | step 11 (readiness) | **Is there room to write?** Free space on the tightest real filesystem on the DR box. |
+
+### The readiness gate
+
+The failover drill does not blindly promote the standby. Before it touches
+production it asks the DR site what it can see of *itself*:
+
+```
+[probe] hostname        : localhost.localdomain
+[probe]   logical cores : 4
+[probe]   RAM available : 5.4 GiB  (72.2 % free)
+[probe]   /            xfs      25.4 GiB total     5.8 GiB used    19.6 GiB free  ( 77.2 % free)
+
+[probe] READY: localhost.localdomain has 4 cores, 72.2 % memory free, 77.2 % disk free
+```
+
+and it compares that against the minimums in `manual/env.sh` (2 cores, 10 %
+memory free, 10 % disk free on the tightest filesystem). If the standby does
+not meet them, **the drill is aborted**: the standby goes back down, PROD keeps
+serving, and the step exits `1`.
+
+```
+[probe] NOT READY for failover:
+[probe]   - only 4 logical cores, need at least 64
+
+BLOCKED: the DR site is not fit to take over. Rolling back.
+...
+    PROD is still serving — production was never at risk.
+```
+
+That is the difference between a failover *demonstration* and a failover
+*gate*: a demonstration proves the switch happened, a gate proves the switch
+was safe.
+
+### The other fourteen tools
+
+`get_hardware_information`, `get_journal_logs`, `read_log_file`,
+`get_network_interfaces`, `get_network_connections`, `list_processes`,
+`get_process_info`, `list_services`, `get_service_status`, `get_service_logs`,
+`list_block_devices`, `list_directories`, `list_files` and `read_file` are all
+exposed and all work over the same SSH transport — they are simply not needed
+to prove a failover. They are the natural extension points: `get_service_status`
+is the tool to reach for if the drill ever needs to assert that `sshd` is
+healthy on the site being promoted, and `list_services` / `get_journal_logs`
+are how you would show *why* a site was not ready.
+
+One note on the transport: over HTTP the MCP evaluates **every** tool call
+against the authorization policy, and a call that matches no rule is denied.
+There is no implicit "allow" over HTTP — that behaviour only exists on the
+stdio transport. The role therefore installs `policy.yaml` with a single
+wildcard rule.
 
 ---
 

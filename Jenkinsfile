@@ -117,6 +117,14 @@ pipeline {
         PROD_EXPECT   = 'server-gateway.example.com'
         DR_EXPECT     = 'localhost.localdomain'
 
+        // The DR readiness gate. Before the drill promotes the standby, the
+        // MCP asks it what it can see of its own host and the answer is
+        // checked against these minimums. A standby that cannot hold the
+        // load is never promoted — the drill rolls back and the build fails.
+        DR_MIN_CPU_CORES         = '2'
+        DR_MIN_FREE_MEM_PERCENT  = '10'
+        DR_MIN_FREE_DISK_PERCENT = '10'
+
         // GIT_ORIGIN is the bare repo inside the Jenkins container, served by
         // the local git daemon (see scripts/install-jenkins-tools.sh). It is
         // git:// and NOT file:// on purpose: the git plugin refuses to check
@@ -601,6 +609,8 @@ PY
                         - --url http://${PROD_HOST}:${MCP_PORT}${MCP_PATH} \
                            --target ${PROD_HOST} \
                            --expect ${PROD_EXPECT} \
+                           --call get_listening_ports \
+                           --assert get_listening_ports=${MCP_PORT} \
                         < scripts/mcp_verify.py 2>&1 | tee -a failover-transcript.txt || VERIFY_RC=$?
 
                     if [ "${VERIFY_RC}" -ne 0 ]; then
@@ -613,13 +623,48 @@ PY
         }
 
         stage('Failover Drill') {
-            // Stop the PROD MCP and promote the DR one. The SAME image is now
-            // serving, but the answer identifies the DR host.
+            // Warm the DR standby, PROVE it can take the load, and only then
+            // stand PROD down and promote DR. The SAME image is now serving,
+            // but the answer identifies the DR host.
+            //
+            // If the readiness probe says DR is not fit, the drill rolls back
+            // to the PROD-only posture and the BUILD FAILS — production was
+            // never taken down.
             steps {
                 sh '''
                     set -eu
                     set -o pipefail
                     export ANSIBLE_PRIVATE_KEY_FILE="${JENKINS_HOME}/.ssh/id_rhai108_rsa"
+
+                    # 1. warm the standby, WITHOUT touching production
+                    cd ansible
+                    ansible-playbook -i inventory.ini dr-warmup.yml
+                    cd ..
+
+                    # 2. the readiness gate
+                    echo "===== DR READINESS PROBE (before any cutover) =====" | tee -a failover-transcript.txt
+                    PROBE_RC=0
+                    podman run -i --rm --name mcp-probe-dr-${BUILD_NUMBER} \
+                        --pull=never --network host --security-opt label=disable \
+                        --entrypoint /opt/venvs/mcp/bin/python \
+                        ${FULL_IMAGE} \
+                        - --url http://${DR_HOST}:${MCP_PORT}${MCP_PATH} \
+                           --target ${DR_HOST} \
+                           --expect ${DR_EXPECT} \
+                           --min-cpu-cores ${DR_MIN_CPU_CORES} \
+                           --min-free-mem-percent ${DR_MIN_FREE_MEM_PERCENT} \
+                           --min-free-disk-percent ${DR_MIN_FREE_DISK_PERCENT} \
+                        < scripts/mcp_dr_probe.py 2>&1 | tee -a failover-transcript.txt || PROBE_RC=$?
+
+                    if [ "${PROBE_RC}" -ne 0 ]; then
+                        echo "BLOCKED: the DR site is not fit to take over. Rolling back."
+                        cd ansible
+                        ansible-playbook -i inventory.ini failback.yml || true
+                        exit 1
+                    fi
+                    echo "" | tee -a failover-transcript.txt
+
+                    # 3. the actual cutover
                     cd ansible
                     ansible-playbook -i inventory.ini failover.yml
 
@@ -633,6 +678,8 @@ PY
                         - --url http://${DR_HOST}:${MCP_PORT}${MCP_PATH} \
                            --target ${DR_HOST} \
                            --expect ${DR_EXPECT} \
+                           --call get_listening_ports \
+                           --assert get_listening_ports=${MCP_PORT} \
                         < scripts/mcp_verify.py 2>&1 | tee -a failover-transcript.txt || VERIFY_RC=$?
 
                     if [ "${VERIFY_RC}" -ne 0 ]; then
@@ -665,6 +712,8 @@ PY
                         - --url http://${PROD_HOST}:${MCP_PORT}${MCP_PATH} \
                            --target ${PROD_HOST} \
                            --expect ${PROD_EXPECT} \
+                           --call get_listening_ports \
+                           --assert get_listening_ports=${MCP_PORT} \
                         < scripts/mcp_verify.py 2>&1 | tee -a failover-transcript.txt || VERIFY_RC=$?
 
                     if [ "${VERIFY_RC}" -ne 0 ]; then

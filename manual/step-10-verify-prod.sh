@@ -11,6 +11,15 @@
 # It is NOT bind-mounted: podman runs on the host and cannot see a path
 # inside a container.
 #
+# TWO facts are proven here, in one MCP session:
+#
+#   1. get_system_information -> the endpoint answers as server-gateway
+#      .example.com, so the PROD site is the one serving.
+#   2. get_listening_ports    -> port 8095 on THAT host is held by the
+#      linux-mcp-server process. This is what makes fact 1 believable: the
+#      MCP did not return a canned string, it really reached the host's
+#      kernel over SSH and read its socket table.
+#
 #   ./manual/step-10-verify-prod.sh
 # ---------------------------------------------------------------------------
 
@@ -34,6 +43,8 @@ verify_mcp \
     "${PROD_HOST}" \
     "${PROD_EXPECT}" \
     "${FULL_IMAGE}" \
+    --call get_listening_ports \
+    --assert "get_listening_ports=${MCP_PORT}" \
     || { echo "${C_RED}BLOCKED: the PROD endpoint did not answer as ${PROD_EXPECT}${C_RESET}"; exit 1; }
 
 echo "" | tee -a "${TRANSCRIPT}"
