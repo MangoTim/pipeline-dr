@@ -511,10 +511,15 @@ cd ~/mcp-dr-pipeline
 
     # --- the whole picture, before the detail
     h2(doc, "How the drill works, end to end")
-    p(doc, "Two diagrams. The first is the pipeline: one image is built and "
-           "scanned once, and the SAME tarball is shipped to both sites. The "
-           "second is the failover drill itself — five moves, and production "
-           "is never at risk until move four.")
+    p(doc, "Four views of the same run. The activity diagram is the whole "
+           "workflow as a flow: build and scan once, fork to the two sites, "
+           "then the drill with its two gates. The pipeline picture carries "
+           "the command behind every stage. The drill picture and the "
+           "sequence diagram carry the drill itself — five moves, and "
+           "production is never at risk until move four.")
+
+    picture(doc, "PROD-DR-Activity-Diagram.png",
+            caption="the workflow as an activity diagram — the two gates are the diamonds")
 
     picture(doc, "PROD-DR-Pipeline-Diagram.png",
             caption="the pipeline, with the command behind every stage")
@@ -678,6 +683,9 @@ cd ~/mcp-dr-pipeline
 
     picture(doc, "PROD-DR-Drill-Diagram.png",
             caption="the drill, with the command behind every move")
+
+    picture(doc, "PROD-DR-Sequence-Diagram.png",
+            caption="the same drill as a sequence diagram — who talks to whom")
 
     p(doc, "Two details worth noticing. First, the verify and probe clients "
            "run INSIDE the container: the script is piped in on STDIN rather "

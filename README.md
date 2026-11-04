@@ -103,10 +103,13 @@ products/mcp-dr-pipeline/
 └── docs/
     ├── build_guide.py            # builds PROD-DR-MCP-Pipeline-Guide.docx
     ├── build_cheatsheet.py       # builds PROD-DR-MCP-Pipeline-Cheatsheet.docx
-    ├── build_diagrams.py         # renders the two PNG diagrams below
+    ├── build_diagrams.py         # renders the pipeline + drill pictures
+    ├── build_uml.py              # renders the UML sequence + activity diagrams
     ├── PROD-DR-Pipeline-Diagram.png   # the pipeline, with the command per stage
     ├── PROD-DR-Drill-Diagram.png      # the drill, with the command per move
-    └── diagram-*.html            # the source of the two diagrams
+    ├── PROD-DR-Sequence-Diagram.png   # the drill, as a UML sequence diagram
+    ├── PROD-DR-Activity-Diagram.png   # the workflow, as a UML activity diagram
+    └── diagram-*.html, uml-*.html  # the source of the four diagrams
 ```
 
 ---
@@ -284,6 +287,15 @@ wildcard rule.
 
 ## How the PROD/DR drill works
 
+### The whole workflow, as an activity diagram
+
+![The pipeline as a UML activity diagram](docs/PROD-DR-Activity-Diagram.png)
+
+The two **diamonds** are the two gates. Everything above the fork happens
+once, on `.105`; the fork is where the single tarball goes to both sites;
+everything below the join is the drill. A gate that says *no* ends the run —
+nothing is deployed, and production keeps serving.
+
 ### The pipeline: build once, deploy the same bytes to both sites
 
 ![The PROD/DR pipeline — one image, built and scanned once, deployed to both sites](docs/PROD-DR-Pipeline-Diagram.png)
@@ -385,6 +397,15 @@ Move ⑤ is the proof, and it is two facts in one session: the hostname says
 *which* site is live, and the socket table says the answer is real — the
 `linux-mcp-server` process really holds port 8095 on that host, so the
 hostname cannot have been a canned string.
+
+### The same drill, as a sequence diagram
+
+![The failover drill as a UML sequence diagram](docs/PROD-DR-Sequence-Diagram.png)
+
+Four lifelines — your client, Jenkins, the PROD MCP and the DR MCP. The
+message that matters is the red one: after the cutover the client still asks
+`.105`, and `.105` refuses. The answer then comes from `.104`, and it is a
+different hostname — because it is a different machine.
 
 ### The drill, with the command behind every move
 
