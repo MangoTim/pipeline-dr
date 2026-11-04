@@ -323,6 +323,24 @@ The container talks to **its own host's sshd** — that is what makes the answer
 identify the site: the MCP inspects the machine it is deployed on, so the same
 image gives a different answer on each box.
 
+### The same workflow, with the command behind every step
+
+| # | What happens | The command / file that does it |
+|---|---|---|
+| 1 | Checkout | `git clone git://127.0.0.1:9418/mcp-dr-pipeline.git` (the bare origin inside the Jenkins container) |
+| 2 | Fetch the MCP source | `curl -fsSL .../rhel-lightspeed/linux-mcp-server/archive/6d7ca1d1….tar.gz` → `upstream/` |
+| 3 | Resolve the version | the `VERSION` file + `TZ=Asia/Hong_Kong date +%d%m%y` → `v1.0.<DDMMYY><NN>` |
+| 4 | Build the image | `podman build --file upstream/Containerfile --format docker --network host` |
+| 5 | Aqua scan — **gate** | `podman run … registry.aquasec.com/scanner:2022.4.868 scan --local …`, then `grep "Image Is Compliant"` |
+| 6 | Trivy baseline | `podman run … trivy image --scanners vuln --pkg-types library --severity HIGH,CRITICAL` — a work list, not a verdict |
+| 7 | Remediate | `scripts/trivy_cve_packages.py` → `cve-fixes.txt` → writes `Containerfile.remediated` → `podman build --file Containerfile.remediated` |
+| 8 | Trivy final — **gate** | the same Trivy command with `--exit-code 1`, against the image that will actually ship |
+| 9 | Export the artifact | `podman save <image> \| gzip > rhel-mcp-….tar.gz` + `sha256sum` |
+| 10 | Deploy to **both** sites | `ansible-playbook -i inventory.ini site.yml` → `ansible/roles/mcp/tasks/main.yml` → `podman load` + `systemctl --user restart` on each site |
+
+Every one of those is a stage in the `Jenkinsfile`, and every one of them has a
+script of its own in `manual/` (`step-00` … `step-13`) for the by-hand run.
+
 ### The drill: five moves, production never at risk until move ④
 
 ```
@@ -356,6 +374,28 @@ Move ⑤ is the proof, and it is two facts in one session: the hostname says
 *which* site is live, and the socket table says the answer is real — the
 `linux-mcp-server` process really holds port 8095 on that host, so the
 hostname cannot have been a canned string.
+
+### The drill, with the command behind every move
+
+| Move | What happens | The command / file that does it |
+|---|---|---|
+| ① | Warm the standby | `ansible-playbook -i inventory.ini dr-warmup.yml` → `ansible/dr-warmup.yml` → `systemctl --user start rhel-mcp.service` **on `.104`** |
+| ② | The readiness gate | `podman run -i --rm --network host <image> - --url http://192.168.147.104:8095/mcp --target 192.168.147.104 --expect localhost.localdomain …` with `scripts/mcp_dr_probe.py` on **STDIN** — the probe runs *inside the image*, so it tests the artifact that was shipped |
+| ③ | The cutover | `ansible-playbook -i inventory.ini failover.yml` → `ansible/failover.yml` → `systemctl --user stop rhel-mcp.service` **on `.105`**, then `systemctl --user start rhel-mcp.service` **on `.104`** |
+| ④ | Verify | `podman run -i --rm --network host <image> - --url http://192.168.147.104:8095/mcp --expect localhost.localdomain --call get_listening_ports --assert get_listening_ports=8095` with `scripts/mcp_verify.py` on STDIN |
+| ⑤ | Fail back | `ansible-playbook -i inventory.ini failback.yml` → `ansible/failback.yml` → stop DR, start PROD, verify `.105` again |
+
+Two details worth noticing in that table:
+
+- **The verify and probe clients run inside the container.** The script is
+  piped in on STDIN (`< scripts/mcp_verify.py`) rather than bind-mounted,
+  because podman runs on the host and cannot see a path inside a container.
+  The client therefore tests the exact image that was deployed, and it needs
+  no extra dependency on the controller — the image already ships `fastmcp`.
+- **The playbook is a thin wrapper; the real work is one systemd command.**
+  `ansible/failover.yml` stops a unit on one host and starts the same unit on
+  the other. That is the whole state change, and it is why the demo needs no
+  root on either site.
 
 **Failback (step 12)** is the mirror image: stop DR, start PROD, verify that
 `.105` answers `server-gateway.example.com` again. The pipeline deliberately

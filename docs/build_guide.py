@@ -536,6 +536,48 @@ cd ~/mcp-dr-pipeline
            "deployed on, so the same image gives a different answer on each "
            "box.")
 
+    h3(doc, "The pipeline, with the command behind every step")
+    table(doc,
+          ["#", "What happens", "The command / file that does it"],
+          [["1", "Checkout",
+            "git clone git://127.0.0.1:9418/mcp-dr-pipeline.git\n"
+            "(the bare origin inside the Jenkins container)"],
+           ["2", "Fetch the MCP source",
+            "curl -fsSL .../rhel-lightspeed/linux-mcp-server/archive/\n"
+            "6d7ca1d1....tar.gz  ->  upstream/"],
+           ["3", "Resolve the version",
+            "the VERSION file + TZ=Asia/Hong_Kong date +%d%m%y\n"
+            "-> v1.0.<DDMMYY><NN>"],
+           ["4", "Build the image",
+            "podman build --file upstream/Containerfile\n"
+            "           --format docker --network host"],
+           ["5", "Aqua scan  [GATE]",
+            "podman run ... registry.aquasec.com/scanner:2022.4.868\n"
+            "    scan --local ...\n"
+            "then: grep \"Image Is Compliant\""],
+           ["6", "Trivy baseline",
+            "podman run ... trivy image --scanners vuln\n"
+            "    --pkg-types library --severity HIGH,CRITICAL\n"
+            "a work list, not a verdict"],
+           ["7", "Remediate",
+            "scripts/trivy_cve_packages.py -> cve-fixes.txt\n"
+            "-> writes Containerfile.remediated\n"
+            "-> podman build --file Containerfile.remediated"],
+           ["8", "Trivy final  [GATE]",
+            "the same Trivy command with --exit-code 1,\n"
+            "against the image that will actually ship"],
+           ["9", "Export the artifact",
+            "podman save <image> | gzip > rhel-mcp-....tar.gz\n"
+            "sha256sum rhel-mcp-....tar.gz"],
+           ["10", "Deploy to BOTH sites",
+            "ansible-playbook -i inventory.ini site.yml\n"
+            "-> ansible/roles/mcp/tasks/main.yml\n"
+            "   podman load + systemctl --user restart"]],
+          widths=[0.4, 1.5, 4.7], mono_cols=[2])
+    p(doc, "Every one of those is a stage in the Jenkinsfile, and every one of "
+           "them has a script of its own in manual/ (step-00 ... step-13) for "
+           "the by-hand run.")
+
     code(doc, """THE FAILOVER DRILL  (step 11 / the "Failover Drill" stage)
 
   move   PROD .105                          DR .104
@@ -577,6 +619,45 @@ cd ~/mcp-dr-pipeline
             "in that posture — PROD live, DR stopped — so the demo always "
             "starts from a known state.",
             "note")
+
+    h3(doc, "The drill, with the command behind every move")
+    table(doc,
+          ["Move", "What happens", "The command / file that does it"],
+          [["1", "Warm the standby",
+            "ansible-playbook -i inventory.ini dr-warmup.yml\n"
+            "-> ansible/dr-warmup.yml\n"
+            "-> systemctl --user start rhel-mcp.service   on .104"],
+           ["2", "The readiness gate",
+            "podman run -i --rm --network host <image> - \\\n"
+            "    --url http://192.168.147.104:8095/mcp \\\n"
+            "    --target 192.168.147.104 \\\n"
+            "    --expect localhost.localdomain ...\n"
+            "with scripts/mcp_dr_probe.py on STDIN"],
+           ["3", "The cutover",
+            "ansible-playbook -i inventory.ini failover.yml\n"
+            "-> ansible/failover.yml\n"
+            "-> systemctl --user stop  rhel-mcp.service   on .105\n"
+            "-> systemctl --user start rhel-mcp.service   on .104"],
+           ["4", "Verify",
+            "podman run -i --rm --network host <image> - \\\n"
+            "    --url http://192.168.147.104:8095/mcp \\\n"
+            "    --expect localhost.localdomain \\\n"
+            "    --call get_listening_ports \\\n"
+            "    --assert get_listening_ports=8095\n"
+            "with scripts/mcp_verify.py on STDIN"],
+           ["5", "Fail back",
+            "ansible-playbook -i inventory.ini failback.yml\n"
+            "-> ansible/failback.yml  (the exact mirror)"]],
+          widths=[0.5, 1.4, 4.7], mono_cols=[2])
+    p(doc, "Two details worth noticing. First, the verify and probe clients "
+           "run INSIDE the container: the script is piped in on STDIN rather "
+           "than bind-mounted, because podman runs on the host and cannot see "
+           "a path inside a container — so the client tests the exact image "
+           "that was deployed, and needs no extra dependency on the "
+           "controller, because the image already ships fastmcp. Second, the "
+           "playbook is a thin wrapper: the real work is one systemd command "
+           "on each side, and that is why the drill needs no root on either "
+           "site.")
 
     # --- 00
     step_header(doc, "00", "preflight", "manual/step-00-preflight.sh", "—")
