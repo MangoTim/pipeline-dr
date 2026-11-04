@@ -1,0 +1,331 @@
+# Driving the pipeline by hand
+
+The Jenkins job does all of this in one click. This folder is the same
+thing **unbundled** — every stage of the pipeline is a separate script, so
+the demo can be run one command at a time and every step can be explained
+while it runs.
+
+Each script mirrors one Jenkins stage, uses the same hosts, the same image,
+the same gates and leaves the same evidence behind.
+
+```
+Jenkins stage                  manual script
+─────────────────────────────────────────────────────────────────────────────
+                                step-00-preflight.sh
+Fetch MCP Source                step-01-fetch-source.sh
+Resolve Version                 step-02-resolve-version.sh
+Build Image                     step-03-build-image.sh
+Aqua Image Scan                 step-04-scan-aqua.sh
+Trivy Scan (baseline)           step-05-scan-trivy.sh
+Security Remediation            step-06-remediate.sh
+Trivy Final Scan                step-07-scan-trivy-final.sh
+Export Artifact                 step-08-export-artifact.sh
+Ansible Deploy                  step-09-deploy.sh
+Verify PROD                     step-10-verify-prod.sh
+Failover Drill                  step-11-failover.sh
+Failback                        step-12-failback.sh
+                                step-13-show-same-artifact.sh  (the evidence)
+```
+
+---
+
+## Where it runs
+
+The steps run **on the PROD host, `192.168.147.105`, as the `rhai` user** —
+the same machine Jenkins runs on, with rootless podman. Nothing is installed
+there for this; the one-time setup in [../RUNBOOK.md](../RUNBOOK.md) is the
+same for the Jenkins run and for this one.
+
+The laptop only drives it. `remote-run.sh` copies the repository across and
+runs **one** step:
+
+```bash
+cd products/mcp-dr-pipeline
+
+./manual/remote-run.sh list        # what the steps are
+./manual/remote-run.sh 03           # copy + build the image on .105
+./manual/remote-run.sh 03 --no-sync # run it again without copying
+./manual/remote-run.sh all          # every step, in order
+```
+
+You can also log in and run them directly:
+
+```bash
+ssh rhai@192.168.147.105
+cd ~/mcp-dr-pipeline
+./manual/step-03-build-image.sh
+```
+
+---
+
+## The one thing to set up first: the Aqua credential
+
+The Aqua gate needs the console's username and password. That is **not** in
+this repository — it never will be. Put it in the deploy user's home
+directory, on the host, once:
+
+```bash
+ssh rhai@192.168.147.105
+mkdir -p ~/.mcp-demo && umask 077
+cat > ~/.mcp-demo/aqua.env <<'EOF'
+AQUA_USER=administrator
+AQUA_PASSWORD=<the aqua console password>
+EOF
+```
+
+`step-04-scan-aqua.sh` reads that file and refuses to run without it. The
+path can be overridden with `AQUA_ENV_FILE`.
+
+---
+
+## The run
+
+### 0 — preflight
+
+```bash
+./manual/remote-run.sh 00
+```
+
+Checks the tools, both sites (over the pipeline's SSH key), the MCP port and
+the credential. It changes nothing.
+
+### 1 — fetch the upstream source
+
+```bash
+./manual/remote-run.sh 01
+```
+
+Downloads Red Hat's `linux-mcp-server` at the pinned commit and unpacks it
+into `upstream/`. The source is **not** modified at any point.
+
+### 2 — resolve the version
+
+```bash
+./manual/remote-run.sh 02
+```
+
+`VERSION` + the Hong Kong date + a run number give the tag
+`v1.0.<DDMMYY><NN>` — the same shape the Jenkins job produces from
+`BUILD_NUMBER`. The value is kept in `.manual-state.env`, so the later steps
+know which image they are dealing with.
+
+### 3 — build
+
+```bash
+./manual/remote-run.sh 03
+```
+
+Builds the upstream `Containerfile` **as it is**. Two flags matter:
+
+- `--network host` — this host's container egress is dropped in the
+  firewalld FORWARD chain, so a bridged build hangs on the `pip install`.
+- `--format docker` — podman's default OCI format silently drops the
+  HEALTHCHECK instruction; the docker format keeps it and is what the
+  scanners expect.
+
+### 4 — the Aqua gate
+
+```bash
+./manual/remote-run.sh 04
+```
+
+The console decides whether the image may ship. The step only continues if
+the report says:
+
+```
+Image Is Compliant
+```
+
+Anything else stops the run. The HTML report lands in
+`manual-reports/aqua-report.html`.
+
+### 5 — the baseline Trivy scan
+
+```bash
+./manual/remote-run.sh 05
+```
+
+Two scans: the Python dependency tree (as JSON — the remediation step
+parses it) and the OS packages of the base image, where **CRITICAL** is a
+hard gate.
+
+The library findings are deliberately **not** a gate here. This scan is the
+input to the next step.
+
+### 6 — security remediation
+
+```bash
+./manual/remote-run.sh 06
+```
+
+Turns the Trivy JSON into a concrete upgrade list and fixes the image:
+
+```
+--- packages to upgrade ---
+authlib==1.9.1
+certifi==2026.10.18
+dnspython==2.9.0
+joserfc==1.7.5
+pyjwt==2.14.0
+```
+
+The result is a **derived** image (`FROM` the upstream one), so every
+upstream layer, label, env var, user and entrypoint is preserved exactly.
+`pip` is deleted from the runtime virtualenv, which takes pip's own vendored
+copies (urllib3, msgpack, setuptools) with it.
+
+If Trivy ever finds a HIGH/CRITICAL library CVE **with no published fix**,
+this step exits `3` and the run stops rather than shipping a known-vulnerable
+image.
+
+### 7 — the final Trivy gate
+
+```bash
+./manual/remote-run.sh 07
+```
+
+The hard gate, on the image that is about to ship:
+
+- no HIGH/CRITICAL library CVEs
+- no CRITICAL OS CVEs
+
+### 8 — export the artifact
+
+```bash
+./manual/remote-run.sh 08
+```
+
+`podman save | gzip`, plus the sha256. The artifact travels as a **file**,
+not through a registry — the DR site must be able to receive a promoted
+image even when the PROD registry is down. That is the whole point of a DR
+site.
+
+### 9 — deploy to both sites
+
+```bash
+./manual/remote-run.sh 09
+```
+
+`ansible-playbook site.yml` copies that one tarball to `.105` and `.104`.
+Each site loads it into its own rootless podman store and runs it as a
+systemd **user** unit. No root, no sudo password, no shared filesystem.
+
+### 10 — verify PROD
+
+```bash
+./manual/remote-run.sh 10
+```
+
+Asks the PROD endpoint who it is:
+
+```
+[verify] PASS: http://192.168.147.105:8095/mcp is serving server-gateway.example.com
+```
+
+### 11 — failover
+
+```bash
+./manual/remote-run.sh 11
+```
+
+Stops the PROD MCP, starts the DR one, and asks again:
+
+```
+[verify] PASS: http://192.168.147.104:8095/mcp is serving localhost.localdomain
+```
+
+The PROD endpoint is now dead — the script shows that too.
+
+### 12 — failback
+
+```bash
+./manual/remote-run.sh 12
+```
+
+The exact inverse. PROD answers again.
+
+### 13 — the evidence
+
+```bash
+./manual/remote-run.sh 13
+```
+
+Both sites, different machines, the same image ID and the same digest:
+
+```
+  site               image id       digest
+  ------------------ -------------- ----------------------------------------
+  192.168.147.105    f0909025c31a   sha256:...
+  192.168.147.104    f0909025c31a   sha256:...
+
+PASS: both sites run the SAME image (f0909025c31a)
+```
+
+That is what makes the failover meaningful: the same bytes, a different
+answer.
+
+---
+
+## The evidence a manual run leaves behind
+
+Everything lands in `manual-reports/` on the control plane:
+
+| File | What it is |
+|---|---|
+| `aqua-report.html` | the Aqua compliance report |
+| `aqua-scan.err` | the scanner's own log |
+| `trivy-report.json` / `trivy-report.txt` | the baseline library scan (machine + human readable) |
+| `trivy-os-report.txt` | the baseline OS scan |
+| `pip-list.txt` | what is really installed in the upstream image |
+| `cve-fixes.txt` | the packages the remediation upgraded |
+| `trivy-final-report.txt` | the final library gate |
+| `trivy-final-os-report.txt` | the final OS gate |
+| `image-inspect.json` | the image ID and digest from both sites |
+| `failover-transcript.txt` | the PROD → DR → PROD transcript |
+
+The transcript is the same file the Jenkins job archives:
+
+```
+===== PROD verification =====
+[verify] PASS: http://192.168.147.105:8095/mcp is serving server-gateway.example.com
+
+===== FAILOVER: DR is now serving =====
+[verify] PASS: http://192.168.147.104:8095/mcp is serving localhost.localdomain
+
+===== FAILBACK: PROD is serving again =====
+[verify] PASS: http://192.168.147.105:8095/mcp is serving server-gateway.example.com
+```
+
+---
+
+## Notes and gotchas
+
+- **The rootless podman API socket.** The Aqua and Trivy scanners reach the
+  local image through a container engine socket. Rootless podman does not
+  expose one by default, so `step-00` starts `podman system service` on
+  demand. In the Jenkins container the root socket is bind-mounted at
+  `/var/run/docker.sock` instead — same idea.
+- **`systemctl --user enable --now` is a no-op** on an already-active unit.
+  A redeploy would load the new image into the store but leave the container
+  running the old one. The Ansible role therefore uses `restart`.
+- **Never `firewall-cmd --reload`** on these hosts. It flushes podman's CNI
+  chains and takes down the containers that are already running.
+- **The state file is `.manual-state.env`** in the repository root on the
+  host. Delete it to start a fresh run with a new tag.
+- **Step 02 can be re-run** to get a new version number — it increments the
+  counter in the state file.
+- **The build takes a while** (the upstream image installs a Python venv
+  from PyPI). The scanners take a minute each. The whole run is roughly 15
+  minutes.
+
+---
+
+## Files
+
+| File | What it is |
+|---|---|
+| `env.sh` | every host, port, image name and version — change things here |
+| `lib.sh` | the shared helpers: banners, state, podman socket, the verify call |
+| `step-NN-*.sh` | one step each |
+| `run-all.sh` | every step in order |
+| `remote-run.sh` | the laptop-side driver: sync + run one step |
