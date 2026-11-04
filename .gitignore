@@ -1,0 +1,20 @@
+# The manual path leaves its evidence here — the Jenkins job archives the
+# same files as build artifacts.
+manual-reports/
+
+# The manual path's state file: the image tag, the artifact name, the run
+# counter. It belongs to one run on one host.
+.manual-state.env
+
+# The upstream MCP source, downloaded at build time (step 01) — pinned by
+# commit in the Jenkinsfile, never vendored.
+upstream/
+
+# The derived Containerfile the remediation step writes, and the exported
+# image tarball.
+Containerfile.remediated
+*.tar.gz
+*.tar.gz.sha256
+
+# The sources the pipeline fetches.
+mcp-src.tar.gz
