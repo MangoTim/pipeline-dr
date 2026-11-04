@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+
+# Word's lock file, left behind while a document is open.
+~$*.docx

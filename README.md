@@ -111,6 +111,32 @@ products/mcp-dr-pipeline/
 `wheel` and no sudo password is involved at any point. The role runs
 `systemctl --user`, which needs `loginctl enable-linger` to survive logout.
 
+**The cutover moves the service; the caller is told the new address.** The
+failover itself is a real state change — `systemctl --user stop
+rhel-mcp.service` on PROD, `start` on DR, so the container really is running
+on the other host. What the drill script *also* does is point the next
+request at that host: the endpoint the client uses goes from
+`http://192.168.147.105:8095/mcp` to `http://192.168.147.104:8095/mcp`.
+
+That is the one simulated part of the demo, and it is simulated on purpose. A
+client-facing address that survives a cutover needs a **floating IP** — an
+address that belongs to no machine until it is added to one — and on Linux
+that is `ip addr add`, which needs `CAP_NET_ADMIN`, i.e. **root on the
+target**. Adding it would undo the property the rest of this pipeline is
+built on: the deploy user never has root on the site it deploys to.
+
+Production DR solves it with a routing protocol instead — VRRP/keepalived, or
+pacemaker + corosync with fencing — where the two servers elect a master and
+the address follows it, with split brain actively prevented. Putting that in
+this lab would mean a root helper on both hosts plus a rollback path for a
+half-finished move.
+
+So the demo draws the line here: **the service moves for real; the address is
+changed by the caller.** Everything else is checkable — one tarball, two
+rootless stores, a unit genuinely stopped and started, and an MCP that
+reports the live site's own kernel state (hostname, cores, RAM, disk) rather
+than a canned string.
+
 **The artifact travels as a tarball, not through the registry.** The DR site
 must be able to receive a promoted image even when the PROD registry is down —
 that is the whole point of a DR site. The pipeline exports

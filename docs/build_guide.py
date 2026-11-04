@@ -1099,6 +1099,29 @@ PASS: both sites run the SAME image (ec616084ab36)
            "systemctl --user, which needs loginctl enable-linger to survive "
            "logout.")
 
+    h3(doc, "Why the client's address changes at the cutover")
+    p(doc, "The service moves for real: the MCP unit is stopped on one host "
+           "and started on the other, so the container really is running on "
+           "the other site. The client's endpoint is changed by the caller — "
+           "from http://192.168.147.105:8095/mcp to "
+           "http://192.168.147.104:8095/mcp.")
+    p(doc, "That is the one simulated part of the drill, and it is simulated "
+           "on purpose. A client-facing address that survives a cutover needs "
+           "a floating IP, and moving an address between hosts means "
+           "'ip addr add', which needs CAP_NET_ADMIN — root on the target. "
+           "Giving the deploy user root would undo the property the rest of "
+           "the role is built on. Production DR uses a routing protocol "
+           "instead: VRRP with keepalived, or pacemaker and corosync with "
+           "fencing, so the address follows the elected master and split "
+           "brain is actively prevented.")
+    callout(doc, "THE LINE THE DEMO DRAWS",
+            "the SERVICE moves for real; the ADDRESS is changed by the "
+            "caller. Everything else is checkable — one tarball, two rootless "
+            "stores, a unit genuinely stopped and started, and an MCP that "
+            "reports the live site's own kernel state (hostname, cores, RAM, "
+            "disk) rather than a canned string.",
+            "info")
+
     h3(doc, "What is deliberately out of scope")
     bullet(doc, "NetApp and shared storage — the demo has no shared "
                 "filesystem on purpose; the artifact travels as a file.")

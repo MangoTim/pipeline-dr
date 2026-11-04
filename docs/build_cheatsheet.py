@@ -343,6 +343,15 @@ cd products/mcp-dr-pipeline
             "MCP inspects the host it is deployed on, over SSH.",
             "info")
 
+    callout(doc, "ONE HONEST CAVEAT",
+            "the SERVICE moves for real — the unit is stopped on one host and "
+            "started on the other. The client's ADDRESS is changed by the "
+            "caller: an address that survives a cutover needs a floating IP, "
+            "and moving one needs root on the target, which this demo "
+            "deliberately never gives. Production DR uses VRRP/keepalived or "
+            "pacemaker instead.",
+            "warn")
+
     doc.save(OUT)
     print(f"wrote {OUT}")
 

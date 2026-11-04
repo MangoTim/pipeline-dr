@@ -201,6 +201,17 @@ already exist — it is shared with the HKU intranet job.
 > tells the remediation what to fix, the second scan is the gate on what is
 > actually shipped. See README.md → *Security remediation*.
 
+> **What the cutover moves, and what it does not.** The service moves for
+> real — the MCP unit is stopped on one site and started on the other. The
+> *client's* endpoint is changed by the caller, because a client-facing
+> address that survives a cutover needs a floating IP, and moving an address
+> between hosts requires root on the target (`ip addr add` needs
+> `CAP_NET_ADMIN`). Production DR does this with VRRP/keepalived or
+> pacemaker + corosync with fencing; this lab deliberately does not, because
+> giving the deploy user root on the site it deploys to would undo the one
+> property the whole role is built on. README.md → *Design decisions worth
+> knowing* has the full reasoning.
+
 ---
 
 ## 6. Troubleshooting

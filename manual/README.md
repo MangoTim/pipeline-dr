@@ -285,6 +285,14 @@ BLOCKED: the DR site is not fit to take over. Rolling back.
 
 The PROD endpoint is now dead — the script shows that too.
 
+> **One honest caveat.** The *service* moves for real — the unit is stopped on
+> one host and started on the other. The *client's* endpoint is changed by the
+> caller, because an address that survives a cutover needs a floating IP, and
+> moving an address between hosts needs root on the target. This lab does not
+> give the deploy user root; production DR uses VRRP/keepalived or
+> pacemaker + corosync with fencing instead. Everything else in the drill is
+> real.
+
 ### 12 — failback
 
 ```bash
