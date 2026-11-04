@@ -46,7 +46,10 @@ while [ "$#" -gt 0 ]; do
         --host)    HOST="$2"; shift 2 ;;
         --user)    USER_NAME="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
-        *) break ;;
+        all)       MODE="all"; shift ;;
+        list)      MODE="list"; shift ;;
+        [0-9]*)    MODE="one"; STEP="$1"; shift ;;
+        *) echo "unknown argument: $1" >&2; usage; exit 1 ;;
     esac
 done
 
@@ -71,12 +74,11 @@ list_steps() {
     done
 }
 
-case "${1:-}" in
-    "") usage; exit 1 ;;
-    list) list_steps; exit 0 ;;
-    all) MODE="all" ;;
-    [0-9]*) MODE="one"; STEP="$1" ;;
-    *) echo "unknown argument: $1" >&2; usage; exit 1 ;;
+case "${MODE:-}" in
+    "")     usage; exit 1 ;;
+    list)   list_steps; exit 0 ;;
+    all)    ;;
+    one)    ;;
 esac
 
 # ------------------------------------------------------------------- sync ---

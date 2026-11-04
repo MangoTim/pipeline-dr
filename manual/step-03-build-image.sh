@@ -20,10 +20,11 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 banner "Step 03 — build the image"
-step_start 03 "building ${BASE_IMAGE} from the unmodified upstream Containerfile"
 
 state_load
 require_state BASE_IMAGE
+
+step_start 03 "building ${BASE_IMAGE} from the unmodified upstream Containerfile"
 
 cd "${WORKDIR}"
 [ -f upstream/Containerfile ] || die "upstream/Containerfile is missing — run step-01 first"

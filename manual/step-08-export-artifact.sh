@@ -14,10 +14,11 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 banner "Step 08 — export the artifact"
-step_start 08 "packing ${FULL_IMAGE} into a tarball"
 
 state_load
 require_state FULL_IMAGE ARTIFACT
+
+step_start 08 "packing ${FULL_IMAGE} into a tarball"
 
 cd "${WORKDIR}"
 mkdir -p "${REPORT_DIR}"

@@ -22,10 +22,11 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 banner "Step 04 — the Aqua gate"
-step_start 04 "scanning ${BASE_IMAGE} with the Aqua console"
 
 state_load
 require_state BASE_IMAGE
+
+step_start 04 "scanning ${BASE_IMAGE} with the Aqua console"
 
 cd "${WORKDIR}"
 mkdir -p "${REPORT_DIR}"

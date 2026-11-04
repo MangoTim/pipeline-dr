@@ -19,10 +19,11 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 banner "Step 05 — the baseline Trivy scan"
-step_start 05 "scanning ${BASE_IMAGE}"
 
 state_load
 require_state BASE_IMAGE
+
+step_start 05 "scanning ${BASE_IMAGE}"
 
 cd "${WORKDIR}"
 mkdir -p "${REPORT_DIR}"

@@ -1,0 +1,6 @@
+# The repository holds shell scripts that are shipped to a Linux host and
+# executed there, so the line endings must be LF everywhere — including in
+# a checkout on Windows, which is where the laptop-side driver
+# (manual/remote-run.sh) tars the working tree and copies it to the
+# control plane.
+* text=auto eol=lf
