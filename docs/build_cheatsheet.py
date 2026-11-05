@@ -28,7 +28,7 @@ from build_guide import (  # noqa: E402
 
 OUT = HERE / "PROD-DR-MCP-Pipeline-Cheatsheet.docx"
 
-IMG = "rhel-mcp-remediated:v1.0.04112601"
+IMG = "rhel-mcp-remediated:v1.0.04112612"
 SOCK = "/run/user/1001/podman/podman.sock"
 TRIVY = "docker.io/aquasec/trivy:0.76.1"
 AQUA = "registry.aquasec.com/scanner:2022.4.868"
@@ -145,9 +145,9 @@ tar -xzf mcp-src.tar.gz -C upstream --strip-components=1""")
          "steps. Re-running gives a NEW tag instead of overwriting the old one.",
          """BASE=$(tr -d ' \\n' < VERSION)           # 1.0
 DAY=$(TZ=Asia/Hong_Kong date +%d%m%y)   # 041126
-SEQ=$(printf '%02d' $(( ${PREV:-0} + 1 ))) # 01
+SEQ=$(printf '%02d' $(( ${PREV:-0} + 1 ))) # 12
 
-IMAGE_VERSION="v${BASE}.${DAY}${SEQ}"     # v1.0.04112601""")
+IMAGE_VERSION="v${BASE}.${DAY}${SEQ}"     # v1.0.04112612""")
 
     step(doc, "03", "manual/step-03-build-image.sh",
          "Build the upstream Containerfile, exactly as Red Hat shipped it. Two "
@@ -158,7 +158,7 @@ IMAGE_VERSION="v${BASE}.${DAY}${SEQ}"     # v1.0.04112601""")
     --file upstream/Containerfile \\
     --format docker \\
     --network host \\
-    --tag rhel-mcp:v1.0.04112601 \\
+    --tag rhel-mcp:v1.0.04112612 \\
     upstream""")
 
     step(doc, "04", "manual/step-04-scan-aqua.sh",
@@ -168,7 +168,7 @@ IMAGE_VERSION="v${BASE}.${DAY}${SEQ}"     # v1.0.04112601""")
     -v {SOCK}:/var/run/docker.sock \\
     {AQUA} \\
     scan --host https://192.168.147.105 \\
-         --local localhost/rhel-mcp:v1.0.04112601 \\
+         --local localhost/rhel-mcp:v1.0.04112612 \\
          --no-verify --user "$AQUA_USER" --password "$AQUA_PASSWORD" --html \\
     > manual-reports/aqua-report.html
 
@@ -183,7 +183,7 @@ grep -q "Image Is Compliant" manual-reports/aqua-report.html""")
     -v trivy-cache:/root/.cache/trivy \\
     {TRIVY} \\
     image --scanners vuln --pkg-types library --severity HIGH,CRITICAL \\
-          --exit-code 1 --format json localhost/rhel-mcp:v1.0.04112601 \\
+          --exit-code 1 --format json localhost/rhel-mcp:v1.0.04112612 \\
     > manual-reports/trivy-report.json""")
 
     step(doc, "06", "manual/step-06-remediate.sh",
@@ -196,9 +196,9 @@ python3 scripts/trivy_cve_packages.py manual-reports/trivy-report.json \\
 
 podman build --network host --pull=never --format docker \\
     --file Containerfile.remediated \\
-    --tag rhel-mcp-remediated:v1.0.04112601 .""",
+    --tag rhel-mcp-remediated:v1.0.04112612 .""",
          caption="the derived Containerfile it writes")
-    code(doc, """FROM localhost/rhel-mcp:v1.0.04112601
+    code(doc, """FROM localhost/rhel-mcp:v1.0.04112612
 USER root
 RUN set -eux; /opt/venvs/mcp/bin/python -m pip install --no-cache-dir --no-deps --upgrade \\
       authlib==1.9.1 certifi==2026.10.18 dnspython==2.9.0 joserfc==1.7.5 pyjwt==2.14.0 ; \\
@@ -221,8 +221,8 @@ USER mcp""")
          "Pack the image as ONE tarball. It travels as a file, not through a "
          "registry — the DR site must be able to receive a promoted image "
          "even when the PROD registry is down.",
-         f"""podman save {IMG} | gzip > rhel-mcp-v1.0.04112601.tar.gz
-sha256sum rhel-mcp-v1.0.04112601.tar.gz | tee rhel-mcp-v1.0.04112601.tar.gz.sha256""")
+         f"""podman save {IMG} | gzip > rhel-mcp-v1.0.04112612.tar.gz
+sha256sum rhel-mcp-v1.0.04112612.tar.gz | tee rhel-mcp-v1.0.04112612.tar.gz.sha256""")
 
     step(doc, "09", "manual/step-09-deploy.sh",
          "Ansible copies the SAME tarball to .105 and .104. Each site loads it "
@@ -232,8 +232,8 @@ sha256sum rhel-mcp-v1.0.04112601.tar.gz | tee rhel-mcp-v1.0.04112601.tar.gz.sha2
 export ANSIBLE_PRIVATE_KEY_FILE=~/.ssh/id_rhai108_rsa
 
 ansible-playbook -i inventory.ini site.yml \\
-    -e mcp_image=rhel-mcp-remediated:v1.0.04112601 \\
-    -e mcp_artifact=/home/rhai/mcp-dr-pipeline/rhel-mcp-v1.0.04112601.tar.gz""")
+    -e mcp_image=rhel-mcp-remediated:v1.0.04112612 \\
+    -e mcp_artifact=/home/rhai/mcp-dr-pipeline/rhel-mcp-v1.0.04112612.tar.gz""")
 
     step(doc, "10", "manual/step-10-verify-prod.sh",
          "Ask PROD who it is, and prove it is real. Two facts in one session: "
@@ -277,10 +277,204 @@ podman run -i --rm ... mcp_verify.py \\
          "The evidence: two different machines running the same bytes. The "
          "image ID and every layer digest must match.",
          """ssh -i ~/.ssh/id_rhai108_rsa rhai@192.168.147.105 \\
-  "podman image inspect rhel-mcp-remediated:v1.0.04112601 --format 'Id={{.Id}} Layers={{.RootFS.Layers}}'"
+  "podman image inspect rhel-mcp-remediated:v1.0.04112612 --format 'Id={{.Id}} Layers={{.RootFS.Layers}}'"
 
 ssh -i ~/.ssh/id_rhai108_rsa dr@192.168.147.104 \\
-  "podman image inspect rhel-mcp-remediated:v1.0.04112601 --format 'Id={{.Id}} Layers={{.RootFS.Layers}}'""")
+  "podman image inspect rhel-mcp-remediated:v1.0.04112612 --format 'Id={{.Id}} Layers={{.RootFS.Layers}}'""")
+
+    # ------------------------------------------------- when to use which ---
+    doc.add_page_break()
+    h1(doc, "When do I use which step?")
+    p(doc, "You will not run all fourteen every time. Each step exists for a "
+           "scene — a point in the demo where you need to show something, or a "
+           "job you have to be able to repeat. This is the map from scene to "
+           "step.")
+
+    table(doc,
+          ["Step", "The scene that calls for it", "What it puts on screen"],
+          [["00",
+            "first thing on a new day, or after anything changed on the hosts "
+            "— a reboot, a new key, a firewall edit",
+            "the tools, the key and BOTH sites are reachable. Changes nothing"],
+           ["01",
+            "you want the upstream MCP source, or you are starting from a "
+            "clean tree",
+            "Red Hat's repo, pinned to one commit — so the build is "
+            "reproducible, not 'whatever is on master today'"],
+           ["02",
+            "any run that produces a shippable image",
+            "the tag: v1.0.<DDMMYY><NN>. Never overwritten, so an old "
+            "artifact stays reproducible"],
+           ["03",
+            "after 01/02, or after any Containerfile change",
+            "ONE image, built from Red Hat's own Containerfile, unmodified"],
+           ["04",
+            "every image that may ship",
+            "the Aqua console's verdict — the compliance gate that says "
+            "this image may go out"],
+           ["05",
+            "right after the build, BEFORE you fix anything",
+            "the work list: which packages carry the CVEs. An INPUT, not a "
+            "verdict — nothing has failed yet"],
+           ["06",
+            "once you have the work list from 05",
+            "the derived image: CVEs upgraded, pip's own vulnerable copies "
+            "deleted, every upstream layer still intact"],
+           ["07",
+            "after 06, on the image that will actually ship",
+            "the hard gate: 0 HIGH/CRITICAL library CVEs, 0 CRITICAL OS CVEs"],
+           ["08",
+            "after 07 passes, before the deploy",
+            "ONE tarball plus its sha256 — the artifact that travels to both "
+            "sites"],
+           ["09",
+            "when the artifact changed",
+            "the same tarball loaded on .105 and .104, each as a systemd user "
+            "unit. No root, no sudo, no shared filesystem"],
+           ["10",
+            "right after a deploy",
+            "the PROD MCP answers AND port 8095 is really held by the MCP "
+            "process — so the hostname cannot be a canned string"],
+           ["11",
+            "the DR drill — the whole point of the demo",
+            "the standby was PROVEN fit, then the answer moved to .104"],
+           ["12",
+            "right after 11, to restore the normal posture",
+            "the original site is back: PROD live, DR stopped"],
+           ["13",
+            "at the end, as the evidence",
+            "the image ID and every layer digest are byte-identical on the "
+            "two hosts"]],
+          widths=[0.45, 2.85, 3.35])
+
+    h2(doc, "Can I skip a step?")
+    p(doc, "Yes for most of them — but three are hard gates, and two are "
+           "dependencies that fail loudly rather than silently.")
+    table(doc,
+          ["Step", "Skip it?", "What happens if you do"],
+          [["00",
+            "yes, once you have done it today",
+            "you find out about a missing key or a closed port halfway "
+            "through the build"],
+           ["01",
+            "yes — if upstream/ is already unpacked",
+            "nothing. The source is pinned to one commit, so a rebuild is the "
+            "same source either way"],
+           ["02",
+            "no — unless you deliberately reuse the tag",
+            "every later step reads the tag from the state file. Skipping it "
+            "leaves the OLD tag in place"],
+           ["03",
+            "yes, if the image is already built",
+            "you reuse the image already in the local podman store"],
+           ["04",
+            "NO — not for a shipping image",
+            "it is a hard gate. The step greps for \"Image Is Compliant\" and "
+            "FAILS if the console says otherwise"],
+           ["05",
+            "yes — but only if you already have the fix list",
+            "step 06 reads manual-reports/trivy-report.json. Without 05 there "
+            "is no work list to apply"],
+           ["06",
+            "no, if the CVEs are not fixed",
+            "the remediated image is what 07 gates and what 09 ships"],
+           ["07",
+            "NO — not for a shipping image",
+            "the hard gate. A HIGH/CRITICAL library CVE fails the step"],
+           ["08",
+            "yes, if the tarball is already on disk",
+            "step 09 needs the file and its sha256 next to it"],
+           ["09",
+            "YES — for the drill only",
+            "the drill playbooks only START and STOP the unit; they never "
+            "reference the image. If both hosts already run it, go straight "
+            "to 11"],
+           ["10",
+            "yes, if you are only doing the drill",
+            "you lose the 'PROD was healthy before we cut over' proof — "
+            "step 11 re-proves it anyway"],
+           ["11",
+            "only if you are not doing the drill",
+            "this IS the failover. Skip it and there is no demo"],
+           ["12",
+            "yes — if you want to LEAVE DR live",
+            "otherwise you finish with PROD live and DR stopped, which is the "
+            "intended posture anyway"],
+           ["13",
+            "yes — it is evidence, not a gate",
+            "but it is the answer to \"is it really the same artifact?\", "
+            "which is the question the demo invites"]],
+          widths=[0.45, 2.05, 4.15])
+
+    h2(doc, "The three runs you will actually do")
+    table(doc,
+          ["Run", "Steps", "When"],
+          [["The full pipeline",
+            "00 → 13, in order",
+            "a fresh build: new source, new image, new deploy, then the "
+            "drill. This is what the Jenkins job does"],
+           ["Just the DR drill",
+            "00, 11, 12, 13",
+            "the image is already deployed on both hosts and you want to show "
+            "the failover. No build, no scan, no deploy"],
+           ["Rebuild and redeploy",
+            "01 → 10",
+            "you changed something upstream and want the new artifact live on "
+            "both sites. Stop before 11 if you are not drilling today"]],
+          widths=[1.5, 1.35, 3.8])
+
+    # ------------------------------------------------------ just the drill --
+    h1(doc, "Just the drill, on the live .105 / .104 pair")
+    p(doc, "This is the short version — no rebuild, no scan, no deploy. The "
+           "image is already loaded on both hosts and both hosts already run "
+           "the systemd unit.")
+    code(doc, """# from the laptop, in the repository
+./manual/remote-run.sh 00            # preflight — changes nothing
+./manual/remote-run.sh 11            # warm DR, gate it, cut over, verify
+./manual/remote-run.sh 12            # fail back to PROD
+./manual/remote-run.sh 13            # the same artifact on both sites""")
+    p(doc, "Steps 11, 12 and 13 read the image tag from the state file on the "
+           "control plane. It has to name the image that is actually loaded "
+           "on both hosts — check it first:")
+    code(doc, """ssh rhai@192.168.147.105 'cat ~/mcp-dr-pipeline/.manual-state.env'
+ssh rhai@192.168.147.105 'podman images --format \"{{.Repository}}:{{.Tag}}\"'""")
+    p(doc, "If FULL_IMAGE does not match what is on the hosts, point it at the "
+           "deployed tag. This is the whole state file, hand-edited:")
+    code(doc, """ssh rhai@192.168.147.105 \\
+  'sed -i "s|^FULL_IMAGE=.*|FULL_IMAGE=rhel-mcp-remediated:v1.0.04112612|" \\
+     ~/mcp-dr-pipeline/.manual-state.env'""")
+    callout(doc, "WHY THE TAG MATTERS",
+            "the drill does not care which image it is — it starts and stops "
+            "the unit. But step 13 DOES: it compares the image ID and the "
+            "layers of the tag in the state file against what each host has "
+            "loaded. If the state file names an image neither host has, step "
+            "13 fails on the inspect, not on the comparison.",
+            "warn")
+
+    h2(doc, "What you should see")
+    table(doc,
+          ["After", "The line to look for", "If you do not get it"],
+          [["00",
+            "both sites ping OK, and the port answers on .105",
+            "a missing key or a closed port — fix it before anything else"],
+           ["11",
+            "DR READINESS PROBE → READY, then FAILOVER: DR is now serving → "
+            "localhost.localdomain",
+            "the drill aborts and PROD keeps serving. That is the gate "
+            "working, not a bug — read the probe's numbers"],
+           ["11",
+            "http://192.168.147.105:8095/mcp → connection refused",
+            "PROD is still up — the cutover did not happen, so the probe "
+            "must have blocked it"],
+           ["12",
+            "PASS: http://192.168.147.105:8095/mcp is serving "
+            "server-gateway.example.com",
+            "the failback playbook did not finish — check the unit on .105"],
+           ["13",
+            "PASS: both sites run the SAME image (7f7c651aa225)",
+            "the two hosts are not running the same bytes — that is a real "
+            "problem, not a formatting one"]],
+          widths=[0.55, 3.05, 3.05])
 
     # ------------------------------------------------------ command sheet ---
     doc.add_page_break()
@@ -328,7 +522,7 @@ cd products/mcp-dr-pipeline
           ["When", "Say this", "Show this"],
           [["After step 03",
             "one image, built from Red Hat's own Containerfile, unmodified",
-            "podman image inspect rhel-mcp:v1.0.04112601"],
+            "podman image inspect rhel-mcp:v1.0.04112612"],
            ["After step 04",
             "the Aqua console approved it — this is the gate that says the "
             "image may ship",

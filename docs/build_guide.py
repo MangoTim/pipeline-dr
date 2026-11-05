@@ -757,10 +757,10 @@ AGENTS.md  Containerfile  docs  licenses  pyproject.toml  src  tests
 Hong Kong date   : 041126
 run number       : 01
 
-image version    : v1.0.04112601
-pre-remediation  : rhel-mcp:v1.0.04112601
-post-remediation : rhel-mcp-remediated:v1.0.04112601
-artifact         : rhel-mcp-v1.0.04112601.tar.gz
+image version    : v1.0.04112612
+pre-remediation  : rhel-mcp:v1.0.04112612
+post-remediation : rhel-mcp-remediated:v1.0.04112612
+artifact         : rhel-mcp-v1.0.04112612.tar.gz
 
 <<< [step 02] OK""")
     callout(doc, "NOTE",
@@ -803,7 +803,7 @@ Image Is Compliant
     code(doc, """podman run --rm --network host \\
     -v /run/user/1001/podman/podman.sock:/var/run/docker.sock \\
     registry.aquasec.com/scanner:2022.4.868 \\
-    scan --host https://192.168.147.105 --local localhost/rhel-mcp:v1.0.04112601 \\
+    scan --host https://192.168.147.105 --local localhost/rhel-mcp:v1.0.04112612 \\
          --no-verify --user "$AQUA_USER" --password "$AQUA_PASSWORD" --html""")
     bullet(doc, "--local <image> is the syntax this scanner version accepts; "
                 "the plugin generates a form it rejects.")
@@ -909,9 +909,9 @@ trivy (OS packages) exit code: 0
            "FILE, not through a registry — the DR site has to be able to "
            "receive a promoted image even when the PROD registry is down. "
            "That is the whole point of a DR site.")
-    code(doc, """artifact : rhel-mcp-v1.0.04112601.tar.gz
+    code(doc, """artifact : rhel-mcp-v1.0.04112612.tar.gz
 size     : 118.4M
-sha256   : 9c1f...  (also written to rhel-mcp-v1.0.04112601.tar.gz.sha256)
+sha256   : 9c1f...  (also written to rhel-mcp-v1.0.04112612.tar.gz.sha256)
 
 <<< [step 08] OK""")
 

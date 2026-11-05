@@ -109,6 +109,9 @@ products/mcp-dr-pipeline/
     ├── PROD-DR-Drill-Diagram.png      # the drill, with the command per move
     ├── PROD-DR-Sequence-Diagram.png   # the drill, as a UML sequence diagram
     ├── PROD-DR-Activity-Diagram.png   # the workflow, as a UML activity diagram
+    ├── PROD-DR-MCP-Pipeline-Guide.docx      # the full walkthrough
+    ├── PROD-DR-MCP-Pipeline-Cheatsheet.docx  # the fast one: what each step is
+    │                                          # for, and which you can skip
     └── diagram-*.html, uml-*.html  # the source of the four diagrams
 ```
 
