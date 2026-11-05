@@ -80,6 +80,61 @@ path can be overridden with `AQUA_ENV_FILE`.
 
 ## The run
 
+### Just the drill — no rebuild, no scan, no deploy
+
+If the image is **already deployed on both hosts** (which it is, after any
+successful pipeline run), you can do the whole PROD/DR story with four
+commands and nothing else:
+
+```bash
+./manual/remote-run.sh 00      # preflight — changes nothing
+./manual/remote-run.sh 11      # warm DR, gate it, cut over, verify
+./manual/remote-run.sh 12      # fail back to PROD
+./manual/remote-run.sh 13      # the same artifact on both sites
+```
+
+Steps 11, 12 and 13 read the image tag from the state file, and it has to
+name an image that is loaded on **both** hosts. Check it first — the state
+file is deliberately NOT overwritten by a sync, so it can drift away from
+whatever was last deployed:
+
+```bash
+ssh rhai@192.168.147.105 'cat ~/mcp-dr-pipeline/.manual-state.env'
+ssh rhai@192.168.147.105 'podman images --format "{{.Repository}}:{{.Tag}}"'
+```
+
+If `FULL_IMAGE` does not match, point it at the deployed tag:
+
+```bash
+ssh rhai@192.168.147.105 \
+  'sed -i "s|^FULL_IMAGE=.*|FULL_IMAGE=rhel-mcp-remediated:v1.0.04112612|" \
+     ~/mcp-dr-pipeline/.manual-state.env'
+```
+
+The drill itself does not care which image it is — `dr-warmup.yml` and
+`failover.yml` only `systemctl --user start/stop rhel-mcp.service` and never
+mention the image. Step 13 does care: it compares the image ID and the
+layer digests of that tag against what each host has loaded.
+
+### Which steps can be skipped
+
+| Step | Skip it? | Why |
+|---|---|---|
+| 00 | yes, once you have done it today | you find a missing key or a closed port halfway through the build |
+| 01 | yes, if `upstream/` is already unpacked | the source is pinned to one commit — the rebuild is the same either way |
+| 02 | no, unless you deliberately reuse the tag | every later step reads the tag from the state file |
+| 03 | yes, if the image is already built | you reuse the image already in the local podman store |
+| 04 | **NO** — hard gate | it greps for `Image Is Compliant` and fails if the console says otherwise |
+| 05 | yes, but only if you already have the fix list | step 06 reads `manual-reports/trivy-report.json` |
+| 06 | no, if the CVEs are not fixed | the remediated image is what 07 gates and what 09 ships |
+| 07 | **NO** — hard gate | a HIGH/CRITICAL library CVE fails the step |
+| 08 | yes, if the tarball is already on disk | step 09 needs the file and its sha256 next to it |
+| 09 | **yes, for the drill only** | the drill playbooks only start and stop the unit |
+| 10 | yes, if you are only doing the drill | step 11 re-proves PROD anyway |
+| 11 | only if you are not doing the drill | this IS the failover |
+| 12 | yes, if you want to LEAVE DR live | otherwise you end with PROD live and DR stopped — the intended posture |
+| 13 | yes — evidence, not a gate | but it answers "is it really the same artifact?" |
+
 ### 0 — preflight
 
 ```bash
@@ -384,6 +439,12 @@ The transcript is the same file the Jenkins job archives:
   chains and takes down the containers that are already running.
 - **The state file is `.manual-state.env`** in the repository root on the
   host. Delete it to start a fresh run with a new tag.
+- **`remote-run.sh` does NOT sync the state file** — it is excluded from the
+  copy on purpose, so a fresh `FULL_IMAGE` does not overwrite the one the
+  later steps are using. The flip side: it does **not** follow a deploy
+  either. If the pipeline shipped a newer image, `FULL_IMAGE` still points
+  at the old tag and steps 11–13 fail on the image inspect. Point it at the
+  deployed tag before running the drill.
 - **Step 02 can be re-run** to get a new version number — it increments the
   counter in the state file.
 - **The build takes a while** (the upstream image installs a Python venv
