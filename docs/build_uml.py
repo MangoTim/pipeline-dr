@@ -164,31 +164,54 @@ LIFELINES = [
 
 # (y, source, target, label, kind, activation-bar-on)
 MESSAGES = [
-    (175, CLIENT, PROD, "get_system_information", "call", PROD),
+    (175, CLIENT, PROD, "get_system_information", "call", (PROD, 265)),
     (212, PROD, PROD, "ssh 127.0.0.1 → its own host's facts", "self", None),
     (258, PROD, CLIENT, "server-gateway.example.com", "ret", None),
 
-    (330, JENKINS, DR, "ansible/dr-warmup.yml → systemctl --user start", "call", DR),
-    (405, JENKINS, DR, "scripts/mcp_dr_probe.py → system, cpu, memory, disk", "call", DR),
+    (330, JENKINS, DR, "ansible/dr-warmup.yml → systemctl --user start", "call", None),
+    (405, JENKINS, DR, "scripts/mcp_dr_probe.py → system, cpu, memory, disk", "call", (DR, 508)),
     (442, DR, DR, "ssh 127.0.0.1 → its own host's facts", "self", None),
     (500, DR, JENKINS, "READY  (not ready → abort, PROD keeps serving)", "ok", None),
 
-    (585, JENKINS, PROD, "ansible/failover.yml → systemctl --user stop", "call", PROD),
-    (650, JENKINS, DR, "systemctl --user start  (idempotent)", "call", DR),
+    (585, JENKINS, PROD, "ansible/failover.yml → systemctl --user stop", "call", None),
+    (650, JENKINS, DR, "systemctl --user start  (idempotent)", "call", None),
 
     (725, CLIENT, PROD, "get_system_information", "call", None),
     (770, PROD, CLIENT, "connection refused — :8095 is gone from .105", "bad", None),
 
-    (840, CLIENT, DR, "get_system_information + get_listening_ports", "call", DR),
+    (840, CLIENT, DR, "get_system_information + get_listening_ports", "call", (DR, 950)),
     (877, DR, DR, "ssh 127.0.0.1 → its own host's facts", "self", None),
     (935, DR, CLIENT, "localhost.localdomain · 8095 held by linux-mcp-server", "ok", None),
 
     (1000, JENKINS, DR, "ansible/failback.yml → systemctl --user stop", "call", None),
-    (1060, JENKINS, PROD, "ansible/failback.yml → systemctl --user start", "call", PROD),
+    (1060, JENKINS, PROD, "ansible/failback.yml → systemctl --user start", "call", None),
 
-    (1130, CLIENT, PROD, "get_system_information", "call", PROD),
+    (1130, CLIENT, PROD, "get_system_information", "call", (PROD, 1183)),
     (1175, PROD, CLIENT, "server-gateway.example.com — back again", "ok", None),
 ]
+
+# The service state on each site, as (y_from, y_to, state).  The lifeline is
+# drawn in that state: solid green while the MCP is running, dashed red while
+# it is stopped.  The boundaries are the messages that change the state.
+STATE_UP = "up"
+STATE_DOWN = "down"
+
+LIFELINE_STATES = {
+    # .105 is live at the start of the drill, until failover.yml stops it.
+    PROD: [(128, 585, STATE_UP), (585, 1060, STATE_DOWN), (1060, 1190, STATE_UP)],
+    # .104 is stopped until dr-warmup.yml starts it, and stopped again by
+    # failback.yml at the end.
+    DR: [(128, 330, STATE_DOWN), (330, 1000, STATE_UP), (1000, 1190, STATE_DOWN)],
+}
+
+# Where the state changes, and what it changes to.
+TRANSITIONS = [
+    (DR, 330, "RUNNING", "ansible/dr-warmup.yml starts the unit"),
+    (PROD, 585, "STOPPED", "ansible/failover.yml stops the unit"),
+    (DR, 1000, "STOPPED", "ansible/failback.yml stops the unit"),
+    (PROD, 1060, "RUNNING", "ansible/failback.yml starts the unit"),
+]
+
 
 STYLE = {
     "call": ("m-ink", INK, None),
@@ -203,6 +226,38 @@ SEQ_H = 1250
 ACT_H = 1870
 
 
+def state_line(x: float, y0: float, y1: float, state: str) -> str:
+    """A lifeline segment, coloured by what the service is doing."""
+    if state == STATE_UP:
+        return (f'<line x1="{x}" y1="{y0}" x2="{x}" y2="{y1}" stroke="{GREEN}" '
+                f'stroke-width="3.4" stroke-linecap="round"/>')
+    return (f'<line x1="{x}" y1="{y0}" x2="{x}" y2="{y1}" stroke="{RED}" '
+            f'stroke-width="3.4" stroke-dasharray="9 7" stroke-linecap="round"/>')
+
+
+def swatch(x1: float, x2: float, y: float, state: str) -> str:
+    """A short horizontal sample of a lifeline, for the legend."""
+    if state == STATE_UP:
+        return (f'<line x1="{x1}" y1="{y}" x2="{x2}" y2="{y}" stroke="{GREEN}" '
+                f'stroke-width="3.4" stroke-linecap="round"/>')
+    return (f'<line x1="{x1}" y1="{y}" x2="{x2}" y2="{y}" stroke="{RED}" '
+            f'stroke-width="3.4" stroke-dasharray="9 7" stroke-linecap="round"/>')
+
+
+def state_pill(x: float, y: float, label: str, color: str,
+               centered: bool = False, solid: bool = True) -> str:
+    w = 6.6 * len(label) + 20
+    x0 = x - w / 2 if centered else x
+    if solid:
+        fill, tcolor, stroke = color, "#FFFFFF", "none"
+    else:
+        fill, tcolor, stroke = "#FFFFFF", color, color
+    out = [f'<rect x="{x0}" y="{y - 11}" width="{w}" height="22" rx="10" '
+           f'fill="{fill}" stroke="{stroke}" stroke-width="2"/>']
+    out.append(txt(x0 + w / 2, y + 4.5, label, 10.5, tcolor, weight="700"))
+    return "".join(out)
+
+
 def sequence_svg() -> str:
     W, H = 1700, SEQ_H
     xs = [x for x, _, _, _, _ in LIFELINES]
@@ -210,14 +265,37 @@ def sequence_svg() -> str:
            f'viewBox="0 0 {W} {H}">', markers(),
            f'<rect width="{W}" height="{H}" fill="#FFFFFF"/>']
 
+    # the legend, so the colours mean something
+    out.append(swatch(70, 104, 24, STATE_UP))
+    out.append(txt(116, 29, "the MCP is running", 12, INK, anchor="start"))
+    out.append(swatch(272, 306, 24, STATE_DOWN))
+    out.append(txt(318, 29, "the MCP is stopped", 12, INK, anchor="start"))
+    out.append(txt(492, 29, "the colour of a lifeline IS the state of the "
+                            "service on that host", 12, GREY, anchor="start",
+                   italic=True))
+
     # lifeline heads
-    for x, title, sub, color, fill in LIFELINES:
-        out.append(f'<rect x="{x - 132}" y="40" width="264" height="58" rx="8" '
+    badges: list[str] = []
+    for idx, (x, title, sub, color, fill) in enumerate(LIFELINES):
+        out.append(f'<rect x="{x - 132}" y="70" width="264" height="58" rx="8" '
                    f'fill="{fill}" stroke="{color}" stroke-width="1.6"/>')
-        out.append(txt(x, 66, title, 14.5, color, weight="700"))
-        out.append(txt(x, 86, sub, 11, GREY))
-        out.append(f'<line x1="{x}" y1="98" x2="{x}" y2="{H - 60}" stroke="#C8C8C8" '
-                   f'stroke-width="1.4" stroke-dasharray="7 6"/>')
+        out.append(txt(x, 96, title, 14.5, color, weight="700"))
+        out.append(txt(x, 116, sub, 11, GREY))
+        if idx in LIFELINE_STATES:
+            # the state badge at the top of the lifeline
+            first = LIFELINE_STATES[idx][0][2]
+            badges.append(state_pill(
+                x, 148, "running" if first == STATE_UP else "stopped",
+                GREEN if first == STATE_UP else RED, centered=True, solid=False))
+        else:
+            out.append(f'<line x1="{x}" y1="128" x2="{x}" y2="{H - 60}" '
+                       f'stroke="#C8C8C8" stroke-width="1.4" stroke-dasharray="7 6"/>')
+
+    # the state-coloured lifelines
+    for idx, segments in LIFELINE_STATES.items():
+        for y0, y1, state in segments:
+            out.append(state_line(xs[idx], y0, y1, state))
+    out.extend(badges)
 
     # the cutover marker
     out.append(f'<rect x="60" y="532" width="{W - 120}" height="30" rx="6" '
@@ -229,8 +307,8 @@ def sequence_svg() -> str:
     for y, src, dst, label, kind, act in MESSAGES:
         if act is None:
             continue
-        end = next((m[0] for m in MESSAGES if m[0] > y and m[1] == act), y + 40)
-        out.append(bar(xs[act], y - 8, min(end + 8, H - 60)))
+        idx, end = act
+        out.append(bar(xs[idx], y - 8, min(end + 8, H - 60)))
 
     # messages
     for y, src, dst, label, kind, act in MESSAGES:
@@ -245,6 +323,12 @@ def sequence_svg() -> str:
         mid = (x1 + x2) / 2
         out.append(txt(mid, y - 9, label, 12, color,
                        anchor="middle" if x2 > x1 else "middle"))
+
+    # the state changes, marked on the lifeline they happen on
+    for idx, y, label, why in TRANSITIONS:
+        color = GREEN if label == "RUNNING" else RED
+        out.append(state_pill(xs[idx] + 14, y, label, color))
+        out.append(txt(xs[idx] + 14, y + 26, why, 10, GREY, anchor="start"))
 
     # the honest line
     out.append(f'<rect x="60" y="{H - 46}" width="{W - 120}" height="34" rx="8" '
@@ -426,8 +510,8 @@ def build() -> None:
 
     seq_html.write_text(page(
         "The failover drill — a sequence diagram",
-        "Who talks to whom, and in what order. The lifeline that answers is the "
-        "live one.",
+        "Who talks to whom, and in what order. A green lifeline is a service "
+        "that is running; a red one is a service that is stopped.",
         seq_svg), encoding="utf-8")
     act_html.write_text(page(
         "The pipeline — an activity diagram",
