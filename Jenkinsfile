@@ -141,6 +141,23 @@ pipeline {
         disableConcurrentBuilds()
     }
 
+    parameters {
+        // Run the PROD/DR drill as part of this build?
+        //
+        // The drill is a REAL state change: PROD goes down, the standby takes
+        // over, and PROD comes back. That is what makes a green build the
+        // proof of the whole story — but it is also the reason the drill
+        // exists as its own jobs (mcp-failover / mcp-failback): a CI build
+        // should never take production down, and failover and failback are
+        // two decisions made at two different times.
+        //
+        // Leave this ON for the demo. Turn it OFF for a routine build.
+        booleanParam(
+            name: 'RUN_DRILL',
+            defaultValue: true,
+            description: 'Run the PROD/DR failover drill and failback in this build')
+    }
+
     stages {
 
         stage('Checkout') {
@@ -630,6 +647,13 @@ PY
             // If the readiness probe says DR is not fit, the drill rolls back
             // to the PROD-only posture and the BUILD FAILS — production was
             // never taken down.
+            //
+            // `!= false` and not a plain truth test: a build that runs
+            // before the job has ever seen the parameter must still do the
+            // drill. Only an explicit "off" skips it.
+            when {
+                expression { params.RUN_DRILL != false }
+            }
             steps {
                 sh '''
                     set -eu
@@ -694,6 +718,9 @@ PY
         stage('Failback') {
             // The exact inverse: stop DR, bring PROD back, and prove the
             // answer came from PROD again.
+            when {
+                expression { params.RUN_DRILL != false }
+            }
             steps {
                 sh '''
                     set -eu
