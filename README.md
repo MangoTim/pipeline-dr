@@ -73,6 +73,8 @@ products/mcp-dr-pipeline/
 ├── RUNBOOK.md                    # one-time setup on both hosts
 ├── VERSION                       # "1.0" -> tag v1.0.<DDMMYY><NN>
 ├── Jenkinsfile                   # the pipeline (13 stages + post-actions)
+├── Jenkinsfile.failover          # the failover drill as a job of its own
+├── Jenkinsfile.failback          # the failback drill as a job of its own
 ├── ansible/
 │   ├── ansible.cfg
 │   ├── inventory.ini             # [mcp_prod] .105 as rhai / [mcp_dr] .104 as dr
@@ -98,6 +100,7 @@ products/mcp-dr-pipeline/
 ├── scripts/
 │   ├── mcp_verify.py             # MCP client: tools/list + get_system_information
 │   ├── mcp_dr_probe.py           # MCP client: the DR readiness gate
+│   ├── drill_common.sh           # the helpers both drill jobs share
 │   ├── trivy_cve_packages.py     # Trivy JSON -> pip upgrade list
 │   └── install-jenkins-tools.sh  # ansible + python3 into the Jenkins container
 └── docs/
@@ -436,6 +439,32 @@ Two details worth noticing in that table:
 `.105` answers `server-gateway.example.com` again. The pipeline deliberately
 *ends* in that posture — PROD live, DR stopped — so the demo always starts
 from a known state.
+
+### The drill as two jobs of its own: `mcp-failover` and `mcp-failback`
+
+The drill above is fused into the build, because a demo wants one green build
+to prove the whole story. Production does not want that: a CI build should
+never take production down, and a build interrupted between the failover and
+the failback leaves the site on the standby.
+
+So the drill also lives in two jobs you trigger when you mean it:
+
+| Job | What it does | What it does NOT do |
+|---|---|---|
+| `mcp-failover` | warm the standby → readiness gate → cut over → verify that DR answers | build, scan or deploy anything |
+| `mcp-failback` | stop DR → restore PROD → verify that PROD answers | the same |
+
+Neither job builds or scans. It acts on whatever is deployed **right now**: the
+image is read from the `ExecStart=` line of the site's systemd unit, so a drill
+can never promote a different artifact than the one production is running.
+
+The main job keeps its own copy of the drill behind the `RUN_DRILL` build
+parameter, so the end-to-end proof is still one build away.
+
+Both jobs are idempotent — `mcp-failback` before any failover is a no-op that
+still proves the PROD endpoint answers — and both send the same kind of
+notification the build does: the artifact, the site that is serving, and the
+transcript as evidence. The helpers they share live in `scripts/drill_common.sh`.
 
 ---
 

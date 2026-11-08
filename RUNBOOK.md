@@ -170,6 +170,36 @@ podman exec jenkins bash -c '
 Credentials: the `aqua-console` credential (username + password) must
 already exist — it is shared with the HKU intranet job.
 
+### 4b. The two drill jobs
+
+Two more pipeline jobs sit next to `mcp-dr-pipeline`, for the times when the
+drill is an operator action rather than a side effect of a build:
+
+| Job | Script Path | What it does |
+|---|---|---|
+| `mcp-failover` | `Jenkinsfile.failover` | warm the DR standby → readiness gate → cut over → verify DR answers |
+| `mcp-failback` | `Jenkinsfile.failback` | stop DR → restore PROD → verify PROD answers |
+
+Both are **Pipeline script from SCM**, with the same SCM as above (same URL,
+same `*/main` branch). Neither needs the `aqua-console` credential: they do
+not build, scan or deploy, so they never touch Aqua — they only need the SSH
+key (step 3b) and the Ansible toolkit (step 3a) that are already in the
+Jenkins container.
+
+From the Jenkins UI: `Manage Jenkins` → `New Item` → `Pipeline` → the name,
+then `Definition: Pipeline script from SCM` with the fields above.
+
+From the API, the `config.xml` of each job is the same as the main job's
+apart from the `<scriptPath>` and the absence of a credential:
+
+```bash
+TOKEN=$(cat ~/.ssh/jenkins-token)
+curl -u admin:${TOKEN} -X POST \
+     "http://192.168.147.105:8081/createItem?name=mcp-failover" \
+     -H "Content-Type: application/xml" \
+     --data-binary @mcp-failover.xml
+```
+
 ---
 
 ## 5. What the pipeline does, in order
