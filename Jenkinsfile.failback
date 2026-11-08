@@ -70,7 +70,6 @@ pipeline {
                 sh '''
                     set -eu
                     source "${WORKSPACE}/scripts/drill_common.sh"
-                    export ANSIBLE_PRIVATE_KEY_FILE="${JENKINS_HOME}/.ssh/id_rhai108_rsa"
 
                     drill_log "===== the artifact that is deployed right now ====="
 
@@ -114,7 +113,6 @@ pipeline {
                 sh '''
                     set -eu
                     source "${WORKSPACE}/scripts/drill_common.sh"
-                    export ANSIBLE_PRIVATE_KEY_FILE="${JENKINS_HOME}/.ssh/id_rhai108_rsa"
 
                     drill_ansible failback.yml
                 '''

@@ -34,6 +34,12 @@ DRILL_STATE_FILE="${WORKSPACE}/.drill-state.env"
 DRILL_CTRL_HOST="${DRILL_CTRL_HOST:-192.168.147.105}"
 DRILL_CTRL_USER="${DRILL_CTRL_USER:-rhai}"
 
+# The controller's SSH key. The Jenkins container's HOME is not JENKINS_HOME,
+# so the key cannot be found through "~" -- name it explicitly. This one
+# export serves both the SSH calls below and the Ansible playbooks, whose
+# ansible.cfg points at "~" as well.
+export ANSIBLE_PRIVATE_KEY_FILE="${ANSIBLE_PRIVATE_KEY_FILE:-${JENKINS_HOME}/.ssh/id_rhai108_rsa}"
+
 drill_log() {
     echo "$@" | tee -a "${DRILL_TRANSCRIPT}"
 }
