@@ -67,9 +67,9 @@ pipeline {
             // site — the unit survives the service being stopped, so this
             // works whether or not a failover is currently in effect.
             steps {
-                sh '''
+                sh '''#!/bin/bash
                     set -eu
-                    source "${WORKSPACE}/scripts/drill_common.sh"
+                    . "${WORKSPACE}/scripts/drill_common.sh"
 
                     drill_log "===== the artifact that is deployed right now ====="
 
@@ -110,9 +110,9 @@ pipeline {
             // The exact inverse of failover.yml: the DR page goes down, then
             // the DR MCP; the PROD MCP comes up first, then the PROD page.
             steps {
-                sh '''
+                sh '''#!/bin/bash
                     set -eu
-                    source "${WORKSPACE}/scripts/drill_common.sh"
+                    . "${WORKSPACE}/scripts/drill_common.sh"
 
                     drill_ansible failback.yml
                 '''
@@ -124,9 +124,9 @@ pipeline {
             // endpoint. The answer identifies the PROD host — the same
             // artifact, back on the original site.
             steps {
-                sh '''
+                sh '''#!/bin/bash
                     set -eu
-                    source "${WORKSPACE}/scripts/drill_common.sh"
+                    . "${WORKSPACE}/scripts/drill_common.sh"
                     drill_state_load
 
                     drill_log "===== FAILBACK: PROD is serving again ====="
@@ -159,9 +159,9 @@ pipeline {
             // The pair is back in the intended posture: PROD serving, DR
             // stopped and ready to take over again.
             steps {
-                sh '''
+                sh '''#!/bin/bash
                     set -u
-                    source "${WORKSPACE}/scripts/drill_common.sh"
+                    . "${WORKSPACE}/scripts/drill_common.sh"
 
                     drill_log "===== the standby ====="
                     if curl -s -o /dev/null --connect-timeout 5 \
@@ -178,7 +178,7 @@ pipeline {
 
     post {
         always {
-            sh '''
+            sh '''#!/bin/bash
                 # The verification containers run with --rm, but a FAILED run
                 # can leave one behind.
                 podman rm -f drill-verify-${BUILD_NUMBER} \

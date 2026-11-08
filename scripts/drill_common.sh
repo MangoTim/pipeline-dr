@@ -109,14 +109,20 @@ drill_state_load() {
 # container, the same script and the same assertions the main pipeline
 # runs -- only the host it runs on is different.
 #
+# The output is captured and then written to the transcript, rather than
+# piped straight through, because the exit status of the SSH command has to
+# survive the write: a pipeline reports the status of the LAST command in
+# it (tee), and the shell that runs these blocks has no PIPESTATUS.
+#
 # usage: drill_verify_mcp <url> <target-host> <expected-hostname> <image> [extra args...]
 drill_verify_mcp() {
     local url="$1" target="$2" expect="$3" image="$4"; shift 4
-    local rc=0
-    drill_ssh "podman run -i --rm --pull=never --network host --security-opt label=disable \
+    local out rc=0
+    out="$(drill_ssh "podman run -i --rm --pull=never --network host --security-opt label=disable \
         --entrypoint /opt/venvs/mcp/bin/python ${image} - \
         --url ${url} --target ${target} --expect ${expect} $*" \
-        < "${WORKSPACE}/scripts/mcp_verify.py" 2>&1 | tee -a "${DRILL_TRANSCRIPT}" || rc=${PIPESTATUS[0]}
+        < "${WORKSPACE}/scripts/mcp_verify.py" 2>&1)" || rc=$?
+    printf '%s\n' "${out}" | tee -a "${DRILL_TRANSCRIPT}"
     return "${rc}"
 }
 
@@ -126,14 +132,16 @@ drill_verify_mcp() {
 #
 # usage: drill_probe_dr <url> <target-host> <expected-hostname> <image>
 drill_probe_dr() {
-    local url="$1" target="$2" expect="$3" image="$4" rc=0
-    drill_ssh "podman run -i --rm --pull=never --network host --security-opt label=disable \
+    local url="$1" target="$2" expect="$3" image="$4"
+    local out rc=0
+    out="$(drill_ssh "podman run -i --rm --pull=never --network host --security-opt label=disable \
         --entrypoint /opt/venvs/mcp/bin/python ${image} - \
         --url ${url} --target ${target} --expect ${expect} \
         --min-cpu-cores ${DR_MIN_CPU_CORES} \
         --min-free-mem-percent ${DR_MIN_FREE_MEM_PERCENT} \
         --min-free-disk-percent ${DR_MIN_FREE_DISK_PERCENT}" \
-        < "${WORKSPACE}/scripts/mcp_dr_probe.py" 2>&1 | tee -a "${DRILL_TRANSCRIPT}" || rc=${PIPESTATUS[0]}
+        < "${WORKSPACE}/scripts/mcp_dr_probe.py" 2>&1)" || rc=$?
+    printf '%s\n' "${out}" | tee -a "${DRILL_TRANSCRIPT}"
     return "${rc}"
 }
 
@@ -142,11 +150,13 @@ drill_probe_dr() {
 #
 # usage: drill_verify_app <url> <expected-hostname> <role> <peer-role> <image>
 drill_verify_app() {
-    local url="$1" expect="$2" role="$3" peer="$4" image="$5" rc=0
-    drill_ssh "podman run -i --rm --pull=never --network host --security-opt label=disable \
+    local url="$1" expect="$2" role="$3" peer="$4" image="$5"
+    local out rc=0
+    out="$(drill_ssh "podman run -i --rm --pull=never --network host --security-opt label=disable \
         --entrypoint python ${image} - \
         --url ${url} --expect ${expect} --role ${role} --peer ${peer}" \
-        < "${WORKSPACE}/scripts/app_verify.py" 2>&1 | tee -a "${DRILL_TRANSCRIPT}" || rc=${PIPESTATUS[0]}
+        < "${WORKSPACE}/scripts/app_verify.py" 2>&1)" || rc=$?
+    printf '%s\n' "${out}" | tee -a "${DRILL_TRANSCRIPT}"
     return "${rc}"
 }
 

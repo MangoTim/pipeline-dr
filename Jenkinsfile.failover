@@ -80,9 +80,9 @@ pipeline {
             // deployed either. The image is read from the systemd unit of the
             // site that is running it.
             steps {
-                sh '''
+                sh '''#!/bin/bash
                     set -eu
-                    source "${WORKSPACE}/scripts/drill_common.sh"
+                    . "${WORKSPACE}/scripts/drill_common.sh"
 
                     drill_log "===== the artifact that is deployed right now ====="
 
@@ -125,9 +125,9 @@ pipeline {
             // up first: the page's panel asks the MCP which site it is talking
             // to, so a page without an MCP is a page with a broken panel.
             steps {
-                sh '''
+                sh '''#!/bin/bash
                     set -eu
-                    source "${WORKSPACE}/scripts/drill_common.sh"
+                    . "${WORKSPACE}/scripts/drill_common.sh"
 
                     drill_ansible dr-warmup.yml
                 '''
@@ -138,9 +138,9 @@ pipeline {
             // Ask the standby what it can see of ITSELF and gate on the
             // answer. A standby that cannot hold the load is NEVER promoted.
             steps {
-                sh '''
+                sh '''#!/bin/bash
                     set -eu
-                    source "${WORKSPACE}/scripts/drill_common.sh"
+                    . "${WORKSPACE}/scripts/drill_common.sh"
                     drill_state_load
 
                     drill_log "===== DR READINESS PROBE (before any cutover) ====="
@@ -169,9 +169,9 @@ pipeline {
             // MCP; the DR MCP comes up first, then the DR page. On the way
             // down a page must never outlive its MCP.
             steps {
-                sh '''
+                sh '''#!/bin/bash
                     set -eu
-                    source "${WORKSPACE}/scripts/drill_common.sh"
+                    . "${WORKSPACE}/scripts/drill_common.sh"
 
                     drill_ansible failover.yml
                 '''
@@ -183,9 +183,9 @@ pipeline {
             // endpoint. The answer identifies the DR host — that is the proof
             // that the SAME artifact is now serving from the other site.
             steps {
-                sh '''
+                sh '''#!/bin/bash
                     set -eu
-                    source "${WORKSPACE}/scripts/drill_common.sh"
+                    . "${WORKSPACE}/scripts/drill_common.sh"
                     drill_state_load
 
                     drill_log "===== FAILOVER: DR is now serving ====="
@@ -218,9 +218,9 @@ pipeline {
             // The punchline of the drill: the site that was serving has gone
             // away, and the same artifact answers from the other site.
             steps {
-                sh '''
+                sh '''#!/bin/bash
                     set -u
-                    source "${WORKSPACE}/scripts/drill_common.sh"
+                    . "${WORKSPACE}/scripts/drill_common.sh"
 
                     drill_log "===== the site that was serving ====="
                     if curl -s -o /dev/null --connect-timeout 5 \
@@ -237,7 +237,7 @@ pipeline {
 
     post {
         always {
-            sh '''
+            sh '''#!/bin/bash
                 # The verification containers run with --rm, but a FAILED run
                 # can leave one behind.
                 podman rm -f drill-verify-${BUILD_NUMBER} \
