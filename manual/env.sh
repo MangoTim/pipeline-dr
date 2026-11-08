@@ -20,6 +20,12 @@ DR_USER="dr"                    # deploy user on DR   (uid 1001)
 MCP_PORT="8095"
 MCP_PATH="/mcp"
 
+# --- the page ---------------------------------------------------------------
+# The Lunch Rolltable app is the pipeline's SECOND artifact. Its panel asks
+# the MCP which site it is talking to, so the drill has a user-visible
+# consequence and not just a changed hostname.
+APP_PORT="8084"
+
 # The hostname each site reports when the MCP inspects it. This is the PROOF
 # of which site is serving: the SAME image, a DIFFERENT answer.
 PROD_EXPECT="server-gateway.example.com"
@@ -39,8 +45,14 @@ DR_MIN_FREE_DISK_PERCENT="${DR_MIN_FREE_DISK_PERCENT:-10}"  # % free on the TIGH
 MCP_REPO="rhel-lightspeed/linux-mcp-server"
 MCP_COMMIT="6d7ca1d1da8598c2e816fd69e98b8f7cf97da0d1"
 
+# The second artifact's source. Pinned to an exact commit, fetched from
+# GitHub at build time, exactly like the MCP source — nothing is vendored.
+APP_REPO="MangoTim/aqua-rolltable-demo"
+APP_COMMIT="70cd368e2de73482fad8618429c008c4f998a589"
+
 # --- images and scanners ----------------------------------------------------
 IMAGE_NAME="rhel-mcp"
+APP_IMAGE_NAME="lunch-rolltable"
 SCANNER_IMAGE="registry.aquasec.com/scanner:2022.4.868"
 TRIVY_IMAGE="docker.io/aquasec/trivy:0.76.1"
 AQUA_HOST="https://192.168.147.105"

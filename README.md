@@ -1,44 +1,59 @@
 # PROD/DR MCP Pipeline Demo
 
-One pipeline builds and scans **one** image, Ansible deploys **that exact
-artifact** to a PROD and a DR site, and the MCP answers from whichever site
+One pipeline builds and scans **two** images, Ansible deploys **those exact
+artifacts** to a PROD and a DR site, and the MCP answers from whichever site
 is live — with a recorded transcript proving it.
 
 Repository: <https://github.com/MangoTim/pipeline-dr>
+
+There are **two artifacts** and they travel as **one release**:
+
+- `rhel-mcp` — the **inspector**. The only privileged component. It SSHes
+  into the host it runs on and reports what it sees.
+- `lunch-rolltable` — the **workload**. The page a user actually looks at.
+  Its panel asks the MCP which site it is talking to, so the failover has a
+  user-visible consequence and not just a changed hostname.
 
 ```
                          .105   PROD  (control plane)
    ┌──────────────────────────────────────────────────────────┐
    │  Jenkins :8081                                            │
-   │    Checkout → Fetch → Build → Aqua scan → Trivy           │
-   │    → Security Remediation → Trivy Final Scan              │
-   │    → Export artifact → Ansible Deploy → Verify PROD       │
+   │    Checkout → Fetch ×2 → Build ×2 → Aqua scan ×2          │
+   │    → Trivy ×2 → Security Remediation → Trivy Final Scan   │
+   │    → Export ×2 → Ansible Deploy → Verify PROD             │
    │    → Failover Drill → Failback → Archive + Email          │
    │                                                          │
    │  ansible-playbook ───────────┐                            │
    │  git://127.0.0.1:9418/...    ▼                            │
-   │                    ┌───────────────────┐                  │
-   │  podman build ──►  │ rhel-mcp:v1.0.x  │                  │
-   │                    └─────────┬─────────┘                  │
-   │                              │ podman save | gzip         │
-   │  rhel-mcp :8095/mcp ─────────┼──────────► tarball         │
-   │     ssh 127.0.0.1 ─► host sshd                            │
+   │             ┌───────────────────┐ ┌───────────────────┐   │
+   │  podman ──► │ rhel-mcp:v1.0.x  │ │ lunch-rolltable:  │   │
+   │   build      └─────────┬─────────┘ │        v1.0.x    │   │
+   │                         │           └─────────┬─────────┘   │
+   │                         │ podman save|gzip  │             │
+   │  rhel-mcp :8095/mcp ────┼──────────► tarball ┼──► tarball │
+   │     ssh 127.0.0.1 ─► host sshd                          │
+   │  lunch-rolltable :8084 ─┘ (its panel asks its own MCP)  │
    └──────────────────────────────┼───────────────────────────┘
                                   ▼
                          .104   DR
    ┌──────────────────────────────────────────────────────────┐
-   │  rhel-mcp :8095/mcp   (SAME image, SAME digest)          │
+   │  rhel-mcp :8095/mcp        (SAME image, SAME digest)     │
    │    ssh 127.0.0.1 ─► host sshd (as dr)                    │
+   │  lunch-rolltable :8084     (SAME image, SAME digest)     │
+   │    its panel asks its own MCP -> localhost.localdomain   │
    └──────────────────────────────────────────────────────────┘
 ```
 
-The demo punchline: the **same artifact** answers with a **different
+The demo punchline: the **same artifacts** answer with a **different
 hostname** depending on which site is live. That is only possible because the
-MCP inspects the host it is deployed on, over SSH.
+MCP inspects the host it is deployed on, over SSH — and because the page
+asks that MCP, so the answer reaches the screen.
 
 ---
 
 ## What is deployed
+
+### 1. The inspector — `rhel-mcp`
 
 Red Hat's official **[linux-mcp-server](https://github.com/rhel-lightspeed/linux-mcp-server)**,
 **unmodified** — upstream commit `6d7ca1d1da8598c2e816fd69e98b8f7cf97da0d1`
@@ -63,6 +78,25 @@ identifies the site that is actually serving.
 `get_network_interfaces`, `get_listening_ports`, `list_block_devices`,
 `list_files`, `list_directories`, `read_file`, and more.
 
+### 2. The workload — `lunch-rolltable`
+
+The **Lunch Rolltable** page, from
+**[MangoTim/aqua-rolltable-demo](https://github.com/MangoTim/aqua-rolltable-demo)**
+at a pinned commit, built from its own upstream `Dockerfile` — also
+unmodified. Python standard library only: no pip dependency tree, and
+therefore no remediation stage. Its Dockerfile carries an `apt-get upgrade`,
+and the Trivy gate proves the Debian package set is patched.
+
+The page serves on **8084** and its panel asks **its own site's MCP** — over
+the loopback, on `127.0.0.1:8095` — which site it is talking to. The MCP
+answers with the hostname of the host that is serving the page. So the panel
+shows `server-gateway.example.com` on PROD and `localhost.localdomain` on DR.
+
+> The app **never gets the SSH key**. The MCP is the only privileged
+> component; the app only speaks HTTP to it. The page's second tile asks the
+> *peer* site's MCP, which is what flips to "connection refused" the moment
+> the peer goes down.
+
 ---
 
 ## Layout
@@ -72,22 +106,28 @@ products/mcp-dr-pipeline/
 ├── README.md                     # this file
 ├── RUNBOOK.md                    # one-time setup on both hosts
 ├── VERSION                       # "1.0" -> tag v1.0.<DDMMYY><NN>
-├── Jenkinsfile                   # the pipeline (13 stages + post-actions)
+├── Jenkinsfile                   # the pipeline (17 stages + post-actions)
 ├── Jenkinsfile.failover          # the failover drill as a job of its own
 ├── Jenkinsfile.failback          # the failback drill as a job of its own
 ├── ansible/
 │   ├── ansible.cfg
 │   ├── inventory.ini             # [mcp_prod] .105 as rhai / [mcp_dr] .104 as dr
-│   ├── site.yml                  # deploy the artifact to every site
+│   ├── site.yml                  # deploy both artifacts to every site
 │   ├── dr-warmup.yml             # start the DR standby, WITHOUT touching PROD
 │   ├── failover.yml              # stop PROD, promote DR
 │   ├── failback.yml              # stop DR, restore PROD
-│   └── roles/mcp/
-│       ├── defaults/main.yml
-│       ├── tasks/main.yml
-│       └── templates/
-│           ├── mcp.service.j2    # the systemd USER unit
-│           └── policy.yaml.j2    # the MCP authorization policy
+│   └── roles/
+│       ├── mcp/
+│       │   ├── defaults/main.yml
+│       │   ├── tasks/main.yml
+│       │   └── templates/
+│       │       ├── mcp.service.j2    # the systemd USER unit
+│       │       └── policy.yaml.j2    # the MCP authorization policy
+│       └── rolltable/
+│           ├── defaults/main.yml
+│           ├── tasks/main.yml
+│           └── templates/
+│               └── rolltable.service.j2   # the page's systemd USER unit
 ├── manual/                       # the SAME pipeline, one step at a time
 │   ├── README.md                 # how to drive it by hand
 │   ├── env.sh                    # every host, port, image and version
@@ -99,6 +139,7 @@ products/mcp-dr-pipeline/
 │   └── remote-run.sh             # laptop side: sync + run one step
 ├── scripts/
 │   ├── mcp_verify.py             # MCP client: tools/list + get_system_information
+│   ├── app_verify.py             # the page's status endpoint: which site is it?
 │   ├── mcp_dr_probe.py           # MCP client: the DR readiness gate
 │   ├── drill_common.sh           # the helpers both drill jobs share
 │   ├── trivy_cve_packages.py     # Trivy JSON -> pip upgrade list
@@ -311,14 +352,19 @@ nothing is deployed, and production keeps serving.
   │                                                      │
   │   Jenkins :8081                                      │
   │                                                      │
-  │     ① Checkout → ② Fetch MCP source → ③ Version      │
-  │            │                                         │
+  │     ① Checkout → ② Fetch MCP source → ②b Fetch app    │
+  │            │            → ③ Version (ONE for both)    │
   │            ▼                                         │
   │     ④ podman build    (Red Hat's own Containerfile,   │
-  │                       unmodified)                    │
+  │        ④b podman build   unmodified)                  │
+  │        (the app's own Dockerfile, unmodified)         │
   │            │                                         │
   │            ▼                                         │
-  │     ⑤ Aqua scan ──GATE──► ⑥ Trivy (baseline)        │
+  │     ⑤ Aqua scan ──GATE──► ⑤b Aqua scan (app) ──GATE─►│
+  │                                  │                   │
+  │                                  ▼                   │
+  │                        ⑥ Trivy (baseline)             │
+  │                        ⑥b Trivy (app) ──GATE──►      │
   │                                  │                   │
   │                                  ▼                   │
   │                        ⑦ Remediate  (upgrade the      │
@@ -328,8 +374,9 @@ nothing is deployed, and production keeps serving.
   │                                  ▼                   │
   │                        ⑧ Trivy final ──GATE──► ⑨ Export │
   │                           0 HIGH/CRITICAL    rhel-mcp-…tgz│
+  │                                          lunch-rolltable…tgz│
   └──────────────────────────────────────┬───────────────┘
-                                         │  ONE tarball, ONE sha256
+                                         │  TWO tarballs, TWO sha256
                         ┌────────────────┴─────────────────┐
                         ▼                                  ▼
           .105  PROD   (rhai)                  .104  DR   (dr)
@@ -337,11 +384,12 @@ nothing is deployed, and production keeps serving.
           │ podman load          │            │ podman load          │
           │ systemd --user unit  │            │ systemd --user unit  │
           │ rhel-mcp :8095/mcp   │            │ rhel-mcp :8095/mcp   │
+          │ lunch-rolltable:8084 │            │ lunch-rolltable:8084 │
           │        │             │            │        │             │
           │        └─ SSH ───────┼──► .105    │        └─ SSH ───────┼──► .104
           │                      │   sshd     │                      │   sshd
           └──────────────────────┘            └──────────────────────┘
-            same image, same bytes              same image, same bytes
+            same images, same bytes            same images, same bytes
             answers                             answers
             "server-gateway.example.com"       "localhost.localdomain"
 ```
@@ -356,14 +404,17 @@ image gives a different answer on each box.
 |---|---|---|
 | 1 | Checkout | `git clone git://127.0.0.1:9418/mcp-dr-pipeline.git` (the bare origin inside the Jenkins container) |
 | 2 | Fetch the MCP source | `curl -fsSL .../rhel-lightspeed/linux-mcp-server/archive/6d7ca1d1….tar.gz` → `upstream/` |
-| 3 | Resolve the version | the `VERSION` file + `TZ=Asia/Hong_Kong date +%d%m%y` → `v1.0.<DDMMYY><NN>` |
-| 4 | Build the image | `podman build --file upstream/Containerfile --format docker --network host` |
-| 5 | Aqua scan — **gate** | `podman run … registry.aquasec.com/scanner:2022.4.868 scan --local …`, then `grep "Image Is Compliant"` |
+| 2b | Fetch the app source | `curl -fsSL .../MangoTim/aqua-rolltable-demo/archive/70cd368….tar.gz` → `app-src/` |
+| 3 | Resolve the version | the `VERSION` file + `TZ=Asia/Hong_Kong date +%d%m%y` → `v1.0.<DDMMYY><NN>` — **one version for both artifacts** |
+| 4 | Build the MCP image | `podman build --file upstream/Containerfile --format docker --network host` |
+| 4b | Build the app image | `podman build --file app-src/Dockerfile --format docker --network host` |
+| 5 | Aqua scan — **gate** | `podman run … registry.aquasec.com/scanner:2022.4.868 scan --local …`, then `grep "Image Is Compliant"` — for **both** images |
 | 6 | Trivy baseline | `podman run … trivy image --scanners vuln --pkg-types library --severity HIGH,CRITICAL` — a work list, not a verdict |
+| 6b | Trivy scan (app) — **gate** | the same Trivy command with `--pkg-types os --severity CRITICAL`, against the app image |
 | 7 | Remediate | `scripts/trivy_cve_packages.py` → `cve-fixes.txt` → writes `Containerfile.remediated` → `podman build --file Containerfile.remediated` |
 | 8 | Trivy final — **gate** | the same Trivy command with `--exit-code 1`, against the image that will actually ship |
-| 9 | Export the artifact | `podman save <image> \| gzip > rhel-mcp-….tar.gz` + `sha256sum` |
-| 10 | Deploy to **both** sites | `ansible-playbook -i inventory.ini site.yml` → `ansible/roles/mcp/tasks/main.yml` → `podman load` + `systemctl --user restart` on each site |
+| 9 | Export the artifacts | `podman save <image> \| gzip > rhel-mcp-….tar.gz` + `sha256sum` — for **both** images |
+| 10 | Deploy to **both** sites | `ansible-playbook -i inventory.ini site.yml` → `ansible/roles/{mcp,rolltable}/tasks/main.yml` → `podman load` + `systemctl --user restart` on each site |
 
 Every one of those is a stage in the `Jenkinsfile`, and every one of them has a
 script of its own in `manual/` (`step-00` … `step-13`) for the by-hand run.
@@ -376,9 +427,10 @@ script of its own in `manual/` (`step-00` … `step-13`) for the by-hand run.
   move   PROD .105                            DR .104
   ────   ────────────────────────────         ────────────────────────────
    ①     ● live, :8095 answering              ○ stopped
+          ● live, :8084 serving the page
 
-   ②     ● still serving  ─── warm it up ──►  start the unit
-          (production untouched)               wait for :8095 to accept
+   ②     ● still serving  ─── warm it up ──►  start both units
+          (production untouched)               wait for :8095 and :8084 to accept
 
    ③     ● still serving  ── readiness ────►  get_system_information
           the gate runs WHILE                  get_cpu_information
@@ -390,19 +442,25 @@ script of its own in `manual/` (`step-00` … `step-13`) for the by-hand run.
                                               down, PROD keeps serving, the step
                                               FAILS. The standby is never promoted.
 
-   ④     ● still serving  ── THE CUTOVER ──►  start the unit
-          stop the PROD unit                   :8095 now answers on .104
+   ④     ● still serving  ── THE CUTOVER ──►  start both units
+          stop the page, then the MCP unit     :8095 and :8084 now answer on .104
 
    ⑤     ○ stopped      ─── VERIFY ───────►  get_system_information
-          :8095 refused                        → localhost.localdomain
+          :8095 and :8084 refused              → localhost.localdomain
                                                get_listening_ports
                                                → 8095 held by linux-mcp-server
+                                             the page's own panel → DR
 ```
 
 Move ⑤ is the proof, and it is two facts in one session: the hostname says
 *which* site is live, and the socket table says the answer is real — the
 `linux-mcp-server` process really holds port 8095 on that host, so the
 hostname cannot have been a canned string.
+
+**Order matters.** On the way down the **page** goes first — a page whose MCP
+has gone would show a broken panel. On the way up the **MCP** goes first —
+the page's panel has nothing to ask until the MCP answers. The two always
+move as one pair.
 
 ### The same drill, as a sequence diagram
 
@@ -417,13 +475,13 @@ different hostname — because it is a different machine.
 
 | Move | What happens | The command / file that does it |
 |---|---|---|
-| ① | Warm the standby | `ansible-playbook -i inventory.ini dr-warmup.yml` → `ansible/dr-warmup.yml` → `systemctl --user start rhel-mcp.service` **on `.104`** |
+| ① | Warm the standby | `ansible-playbook -i inventory.ini dr-warmup.yml` → `ansible/dr-warmup.yml` → `systemctl --user start rhel-mcp.service` **and** `systemctl --user start lunch-rolltable.service` **on `.104`** |
 | ② | The readiness gate | `podman run -i --rm --network host <image> - --url http://192.168.147.104:8095/mcp --target 192.168.147.104 --expect localhost.localdomain …` with `scripts/mcp_dr_probe.py` on **STDIN** — the probe runs *inside the image*, so it tests the artifact that was shipped |
-| ③ | The cutover | `ansible-playbook -i inventory.ini failover.yml` → `ansible/failover.yml` → `systemctl --user stop rhel-mcp.service` **on `.105`**, then `systemctl --user start rhel-mcp.service` **on `.104`** |
-| ④ | Verify | `podman run -i --rm --network host <image> - --url http://192.168.147.104:8095/mcp --expect localhost.localdomain --call get_listening_ports --assert get_listening_ports=8095` with `scripts/mcp_verify.py` on STDIN |
+| ③ | The cutover | `ansible-playbook -i inventory.ini failover.yml` → `ansible/failover.yml` → stop `lunch-rolltable.service` then `rhel-mcp.service` **on `.105`**, then start `rhel-mcp.service` then `lunch-rolltable.service` **on `.104`** |
+| ④ | Verify | `podman run -i --rm --network host <image> - --url http://192.168.147.104:8095/mcp --expect localhost.localdomain --call get_listening_ports --assert get_listening_ports=8095` with `scripts/mcp_verify.py` on STDIN — and the same for the page, with `scripts/app_verify.py` against `:8084/api/mcp/status` |
 | ⑤ | Fail back | `ansible-playbook -i inventory.ini failback.yml` → `ansible/failback.yml` → stop DR, start PROD, verify `.105` again |
 
-Two details worth noticing in that table:
+Three details worth noticing in that table:
 
 - **The verify and probe clients run inside the container.** The script is
   piped in on STDIN (`< scripts/mcp_verify.py`) rather than bind-mounted,
@@ -434,6 +492,10 @@ Two details worth noticing in that table:
   `ansible/failover.yml` stops a unit on one host and starts the same unit on
   the other. That is the whole state change, and it is why the demo needs no
   root on either site.
+- **The page's check is the whole chain.** `scripts/app_verify.py` asks the
+  page's status endpoint, the page asks its own MCP, and the MCP reports the
+  hostname of the host that is serving the page — `page → MCP → host`. So a
+  green app check proves the page and the MCP are on the **same** site.
 
 **Failback (step 12)** is the mirror image: stop DR, start PROD, verify that
 `.105` answers `server-gateway.example.com` again. The pipeline deliberately
@@ -483,25 +545,29 @@ transcript as evidence. The helpers they share live in `scripts/drill_common.sh`
 
 ### 0. Before you start (one-time, see RUNBOOK.md)
 
-Open port 8095 on both hosts, install `python3.9` on both, enable linger for
-`rhai` and `dr`, and install ansible + python3 + the git daemon into the
-Jenkins container (that script also creates the bare git origin).
+Open ports 8095 and 8084 on both hosts, install `python3.9` on both, enable
+linger for `rhai` and `dr`, and install ansible + python3 + the git daemon
+into the Jenkins container (that script also creates the bare git origin).
 
 ### 1. Run the pipeline
 
-Jenkins → `mcp-dr-pipeline` → **Build Now**. Thirteen stages:
+Jenkins → `mcp-dr-pipeline` → **Build Now**. Seventeen stages:
 
 ```
-Checkout → Fetch MCP Source → Resolve Version → Build Image
-  → Aqua Image Scan → Trivy Scan → Security Remediation
+Checkout → Fetch MCP Source → Fetch App Source → Resolve Version
+  → Build Image → Build App Image
+  → Aqua Image Scan → Aqua Image Scan (App)
+  → Trivy Scan → Trivy Scan (App) → Security Remediation
   → Trivy Final Scan → Export Artifact
   → Ansible Deploy → Verify PROD → Failover Drill → Failback
 ```
 
-The two scan gates are worth watching. The Aqua gate is a hard stop:
+The scan gates are worth watching. The Aqua gate is a hard stop — and it runs
+for **both** images:
 
 ```
 + grep -q Image Is Compliant aqua-report.html
++ grep -q Image Is Compliant aqua-report-app.html
 ```
 
 The remediation stage shows what it fixed:
@@ -517,17 +583,19 @@ pyjwt==2.14.0
 
 and the final Trivy scan must come back with zero HIGH/CRITICAL library CVEs.
 
-Then the two verification gates:
+Then the verification gates — two for PROD, two for DR:
 
 ```
 [verify] tools exposed (19): get_cpu_information, get_disk_usage, ...
 [verify] PASS: http://192.168.147.105:8095/mcp is serving server-gateway.example.com
+[app]    PASS: http://192.168.147.105:8084/api/mcp/status is serving PROD (server-gateway.example.com)
 ```
 
 and, after the failover drill:
 
 ```
 [verify] PASS: http://192.168.147.104:8095/mcp is serving localhost.localdomain
+[app]    PASS: http://192.168.147.104:8084/api/mcp/status is serving DR (localhost.localdomain)
 ```
 
 ### 2. Show that PROD is live
@@ -539,7 +607,16 @@ curl -s -X POST http://192.168.147.105:8095/mcp \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"demo","version":"1.0"}}}'
 ```
 
-### 3. Show that the artifact is identical on both sites
+And the page, which is what a user would actually look at:
+
+```bash
+curl -s http://192.168.147.105:8084/api/mcp/status | python3 -m json.tool
+```
+
+The `site` tile says PROD and `server-gateway.example.com`; the `dr` tile
+says "connection refused" — DR is down.
+
+### 3. Show that the artifacts are identical on both sites
 
 ```bash
 ssh rhai@192.168.147.105 'podman image inspect localhost/rhel-mcp-remediated:v1.0.<tag> --format "Id={{.Id}} Layers={{.RootFS.Layers}}"'
@@ -547,7 +624,8 @@ ssh dr@192.168.147.104  'podman image inspect localhost/rhel-mcp-remediated:v1.0
 ```
 
 Both sites print the **same image ID** and **the same layer digests** —
-different hosts, byte-identical content.
+different hosts, byte-identical content. The same holds for the app image
+(`localhost/lunch-rolltable:v1.0.<tag>`).
 
 > The *manifest* digest (`{{.Digest}}`) can differ between the two sites,
 > and that is expected: each site's podman rebuilds the manifest when it
@@ -566,33 +644,48 @@ get_system_information(host="192.168.147.104")
   -> hostname: localhost.localdomain
 ```
 
+Or let the **page** ask it — the page's panel is the same MCP, reached over
+the loopback on whichever site is serving:
+
+```bash
+curl -s http://192.168.147.105:8084/api/mcp/status | python3 -m json.tool
+```
+
 ### 5. Fail over, live
 
 The pipeline ends with the **failback**, so DR is stopped and PROD is the live
-site. Start DR, then stop PROD — now there is exactly one live site.
+site. Bring DR up, then take PROD down — now there is exactly one live site.
+
+The two units move as **one pair**, and the order matters: on the way down the
+page goes first (a page whose MCP has gone would show a broken panel); on the
+way up the MCP goes first (the page has nothing to ask until the MCP answers).
 
 ```bash
 # bring the DR site up (the pipeline's failback left it stopped)
 ssh dr@192.168.147.104 'systemctl --user start rhel-mcp.service'
+ssh dr@192.168.147.104 'systemctl --user start lunch-rolltable.service'
 
 # take PROD down — DR is now the only live site
+ssh rhai@192.168.147.105 'systemctl --user stop lunch-rolltable.service'
 ssh rhai@192.168.147.105 'systemctl --user stop rhel-mcp.service'
 ```
 
-Now `.105` refuses connections and `.104` is the only live site. Ask the MCP
-about the DR host — it answers. Ask it about the PROD host — it is down.
+Now `.105` refuses connections on both ports and `.104` is the only live
+site. The page on `.104` now asks the DR MCP, and its tile flips to DR.
 
 > **Say this while you do it.** In production the client would keep the *same*
 > address across the cutover — a floating IP, or a DNS name that follows the
 > live site. This lab has the drill pass the new address to the caller
 > instead, because moving an address between hosts needs root on the target and
 > this demo never gives the deploy user root. The **service** really did move:
-> the unit is stopped on `.105` and running on `.104`.
+> the units are stopped on `.105` and running on `.104`.
 
 ```bash
 # fail back: stop DR, bring PROD up again
+ssh dr@192.168.147.104 'systemctl --user stop lunch-rolltable.service'
 ssh dr@192.168.147.104 'systemctl --user stop rhel-mcp.service'
 ssh rhai@192.168.147.105 'systemctl --user start rhel-mcp.service'
+ssh rhai@192.168.147.105 'systemctl --user start lunch-rolltable.service'
 ```
 
 ### 6. Show the evidence
@@ -602,12 +695,15 @@ Jenkins build → **Artifacts** → `failover-transcript.txt`:
 ```
 ===== PROD verification =====
 [verify] PASS: http://192.168.147.105:8095/mcp is serving server-gateway.example.com
+[app]    PASS: http://192.168.147.105:8084/api/mcp/status is serving PROD (server-gateway.example.com)
 
 ===== FAILOVER: DR is now serving =====
 [verify] PASS: http://192.168.147.104:8095/mcp is serving localhost.localdomain
+[app]    PASS: http://192.168.147.104:8084/api/mcp/status is serving DR (localhost.localdomain)
 
 ===== FAILBACK: PROD is serving again =====
 [verify] PASS: http://192.168.147.105:8095/mcp is serving server-gateway.example.com
+[app]    PASS: http://192.168.147.105:8084/api/mcp/status is serving PROD (server-gateway.example.com)
 ```
 
 ---
@@ -620,29 +716,46 @@ experiment with the MCP itself; use the pipeline when you want the hardened
 artifact.
 
 ```bash
-# build
+# build the inspector
 curl -fsSL -o mcp-src.tar.gz \
   "https://github.com/rhel-lightspeed/linux-mcp-server/archive/6d7ca1d1da8598c2e816fd69e98b8f7cf97da0d1.tar.gz"
 mkdir -p upstream && tar -xzf mcp-src.tar.gz -C upstream --strip-components=1
 podman build --file upstream/Containerfile --format docker --network host \
     -t rhel-mcp:v1.0.manual upstream
 
+# build the workload
+curl -fsSL -o app-src.tar.gz \
+  "https://github.com/MangoTim/aqua-rolltable-demo/archive/70cd368e2de73482fad8618429c008c4f998a589.tar.gz"
+mkdir -p app-src && tar -xzf app-src.tar.gz -C app-src --strip-components=1
+podman build --file app-src/Dockerfile --format docker --network host \
+    -t lunch-rolltable:v1.0.manual app-src
+
 # export
-podman save rhel-mcp:v1.0.manual | gzip > rhel-mcp-v1.0.manual.tar.gz
+podman save rhel-mcp:v1.0.manual       | gzip > rhel-mcp-v1.0.manual.tar.gz
+podman save lunch-rolltable:v1.0.manual | gzip > lunch-rolltable-v1.0.manual.tar.gz
 
 # deploy to both sites
 cd ansible
 ansible-playbook -i inventory.ini site.yml \
     -e mcp_image=rhel-mcp:v1.0.manual \
-    -e mcp_artifact=$(cd .. && pwd)/rhel-mcp-v1.0.manual.tar.gz
+    -e mcp_artifact=$(cd .. && pwd)/rhel-mcp-v1.0.manual.tar.gz \
+    -e rolltable_image=lunch-rolltable:v1.0.manual \
+    -e rolltable_artifact=$(cd .. && pwd)/lunch-rolltable-v1.0.manual.tar.gz
 
-# verify
+# verify the inspector
 podman run -i --rm --network host \
     --entrypoint /opt/venvs/mcp/bin/python \
     rhel-mcp:v1.0.manual \
     - --url http://192.168.147.105:8095/mcp \
        --target 192.168.147.105 --expect server-gateway.example.com \
     < ../scripts/mcp_verify.py
+
+# verify the workload
+podman run -i --rm --network host --entrypoint python \
+    lunch-rolltable:v1.0.manual \
+    - --url http://192.168.147.105:8084/api/mcp/status \
+       --expect server-gateway.example.com --role PROD --peer DR \
+    < ../scripts/app_verify.py
 ```
 
 ---

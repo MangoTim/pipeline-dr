@@ -148,6 +148,26 @@ verify_mcp() {
     return "${rc}"
 }
 
+# Run the app verify client INSIDE the app image, so the page that is being
+# tested is exactly the one that was shipped. The image carries nothing but
+# the Python standard library, which is enough: the app's own status
+# endpoint already returns everything as JSON.
+#
+# This is the full chain — page -> MCP -> host. The page asks its OWN MCP
+# which site it is talking to, and the MCP answers with the hostname of the
+# host that is serving the page. So the hostname the page reports identifies
+# the site that is ACTUALLY serving.
+verify_app() {
+    # usage: verify_app <url> <expected-hostname> <role> <peer-role> <image>
+    local url="$1" expect="$2" role="$3" peer="$4" image="$5" rc=0
+    podman run -i --rm --pull=never --network host --security-opt label=disable \
+        --entrypoint python \
+        "${image}" \
+        - --url "${url}" --expect "${expect}" --role "${role}" --peer "${peer}" \
+        < "${WORKDIR}/scripts/app_verify.py" 2>&1 | tee -a "${TRANSCRIPT}" || rc=${PIPESTATUS[0]}
+    return "${rc}"
+}
+
 # Ask the MCP what the standby site can see of ITSELF and gate on the
 # numbers. This is the readiness check that makes the MCP load-bearing in the
 # failover drill: a standby that cannot hold the load is never promoted.

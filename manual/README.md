@@ -5,18 +5,30 @@ thing **unbundled** — every stage of the pipeline is a separate script, so
 the demo can be run one command at a time and every step can be explained
 while it runs.
 
-Each script mirrors one Jenkins stage, uses the same hosts, the same image,
+Each script mirrors one Jenkins stage, uses the same hosts, the same images,
 the same gates and leaves the same evidence behind.
+
+There are **two artifacts** and they travel as one release:
+
+- `rhel-mcp` — the *inspector*. The only privileged component. It SSHes into
+  the host it runs on and reports what it sees.
+- `lunch-rolltable` — the *workload*. The page a user actually looks at. Its
+  panel asks the MCP which site it is talking to, so the failover has a
+  user-visible consequence and not just a changed hostname.
 
 ```
 Jenkins stage                  manual script
 ─────────────────────────────────────────────────────────────────────────────
                                 step-00-preflight.sh
 Fetch MCP Source                step-01-fetch-source.sh
+Fetch App Source                step-01-fetch-source.sh
 Resolve Version                 step-02-resolve-version.sh
 Build Image                     step-03-build-image.sh
+Build App Image                 step-03-build-image.sh
 Aqua Image Scan                 step-04-scan-aqua.sh
+Aqua Image Scan (App)           step-04-scan-aqua.sh
 Trivy Scan (baseline)           step-05-scan-trivy.sh
+Trivy Scan (App)                step-05-scan-trivy.sh
 Security Remediation            step-06-remediate.sh
 Trivy Final Scan                step-07-scan-trivy-final.sh
 Export Artifact                 step-08-export-artifact.sh
@@ -93,8 +105,8 @@ commands and nothing else:
 ./manual/remote-run.sh 13      # the same artifact on both sites
 ```
 
-Steps 11, 12 and 13 read the image tag from the state file, and it has to
-name an image that is loaded on **both** hosts. Check it first — the state
+Steps 11, 12 and 13 read the image tags from the state file, and they have to
+name images that are loaded on **both** hosts. Check them first — the state
 file is deliberately NOT overwritten by a sync, so it can drift away from
 whatever was last deployed:
 
@@ -103,33 +115,36 @@ ssh rhai@192.168.147.105 'cat ~/mcp-dr-pipeline/.manual-state.env'
 ssh rhai@192.168.147.105 'podman images --format "{{.Repository}}:{{.Tag}}"'
 ```
 
-If `FULL_IMAGE` does not match, point it at the deployed tag:
+If they do not match, point them at the deployed tags:
 
 ```bash
 ssh rhai@192.168.147.105 \
   'sed -i "s|^FULL_IMAGE=.*|FULL_IMAGE=rhel-mcp-remediated:v1.0.04112612|" \
      ~/mcp-dr-pipeline/.manual-state.env'
+ssh rhai@192.168.147.105 \
+  'sed -i "s|^APP_FULL_IMAGE=.*|APP_FULL_IMAGE=lunch-rolltable:v1.0.04112612|" \
+     ~/mcp-dr-pipeline/.manual-state.env'
 ```
 
-The drill itself does not care which image it is — `dr-warmup.yml` and
-`failover.yml` only `systemctl --user start/stop rhel-mcp.service` and never
-mention the image. Step 13 does care: it compares the image ID and the
-layer digests of that tag against what each host has loaded.
+The drill itself does not care which images they are — `dr-warmup.yml` and
+`failover.yml` only `systemctl --user start/stop` the two units and never
+mention the images. Step 13 does care: it compares the image ID and the
+layer digests of those tags against what each host has loaded.
 
 ### Which steps can be skipped
 
 | Step | Skip it? | Why |
 |---|---|---|
 | 00 | yes, once you have done it today | you find a missing key or a closed port halfway through the build |
-| 01 | yes, if `upstream/` is already unpacked | the source is pinned to one commit — the rebuild is the same either way |
+| 01 | yes, if `upstream/` and `app-src/` are already unpacked | the sources are pinned to one commit each — the rebuild is the same either way |
 | 02 | no, unless you deliberately reuse the tag | every later step reads the tag from the state file |
-| 03 | yes, if the image is already built | you reuse the image already in the local podman store |
+| 03 | yes, if the images are already built | you reuse the images already in the local podman store |
 | 04 | **NO** — hard gate | it greps for `Image Is Compliant` and fails if the console says otherwise |
 | 05 | yes, but only if you already have the fix list | step 06 reads `manual-reports/trivy-report.json` |
 | 06 | no, if the CVEs are not fixed | the remediated image is what 07 gates and what 09 ships |
 | 07 | **NO** — hard gate | a HIGH/CRITICAL library CVE fails the step |
-| 08 | yes, if the tarball is already on disk | step 09 needs the file and its sha256 next to it |
-| 09 | **yes, for the drill only** | the drill playbooks only start and stop the unit |
+| 08 | yes, if the tarballs are already on disk | step 09 needs the files and their sha256 next to them |
+| 09 | **yes, for the drill only** | the drill playbooks only start and stop the units |
 | 10 | yes, if you are only doing the drill | step 11 re-proves PROD anyway |
 | 11 | only if you are not doing the drill | this IS the failover |
 | 12 | yes, if you want to LEAVE DR live | otherwise you end with PROD live and DR stopped — the intended posture |
@@ -144,14 +159,15 @@ layer digests of that tag against what each host has loaded.
 Checks the tools, both sites (over the pipeline's SSH key), the MCP port and
 the credential. It changes nothing.
 
-### 1 — fetch the upstream source
+### 1 — fetch the upstream sources
 
 ```bash
 ./manual/remote-run.sh 01
 ```
 
-Downloads Red Hat's `linux-mcp-server` at the pinned commit and unpacks it
-into `upstream/`. The source is **not** modified at any point.
+Downloads Red Hat's `linux-mcp-server` at the pinned commit into `upstream/`,
+and the Lunch Rolltable app at its pinned commit into `app-src/`. Neither
+source is **modified** at any point.
 
 ### 2 — resolve the version
 
@@ -162,7 +178,8 @@ into `upstream/`. The source is **not** modified at any point.
 `VERSION` + the Hong Kong date + a run number give the tag
 `v1.0.<DDMMYY><NN>` — the same shape the Jenkins job produces from
 `BUILD_NUMBER`. The value is kept in `.manual-state.env`, so the later steps
-know which image they are dealing with.
+know which images they are dealing with. The app ships as the **same**
+version: one release, two artifacts, one pair.
 
 ### 3 — build
 
@@ -170,7 +187,7 @@ know which image they are dealing with.
 ./manual/remote-run.sh 03
 ```
 
-Builds the upstream `Containerfile` **as it is**. Two flags matter:
+Builds both upstream Containerfiles **as they are**. Two flags matter:
 
 - `--network host` — this host's container egress is dropped in the
   firewalld FORWARD chain, so a bridged build hangs on the `pip install`.
@@ -184,15 +201,15 @@ Builds the upstream `Containerfile` **as it is**. Two flags matter:
 ./manual/remote-run.sh 04
 ```
 
-The console decides whether the image may ship. The step only continues if
-the report says:
+The console decides whether an image may ship — and **both** images go
+through it. The step only continues if the report says:
 
 ```
 Image Is Compliant
 ```
 
-Anything else stops the run. The HTML report lands in
-`manual-reports/aqua-report.html`.
+Anything else stops the run. The HTML reports land in
+`manual-reports/aqua-report.html` and `manual-reports/aqua-report-app.html`.
 
 ### 5 — the baseline Trivy scan
 
@@ -200,12 +217,17 @@ Anything else stops the run. The HTML report lands in
 ./manual/remote-run.sh 05
 ```
 
-Two scans: the Python dependency tree (as JSON — the remediation step
-parses it) and the OS packages of the base image, where **CRITICAL** is a
-hard gate.
+Three scans: the Python dependency tree of the MCP (as JSON — the remediation
+step parses it), the OS packages of the MCP base image, and the OS packages
+of the app image. **CRITICAL** is a hard gate on both OS scans.
 
 The library findings are deliberately **not** a gate here. This scan is the
 input to the next step.
+
+The app has no library tree and no remediation step — it is the Python
+standard library and three source files — so its single OS scan *is* its
+gate. Its Dockerfile carries an `apt-get upgrade`, and the gate proves the
+Debian package set was patched at build time.
 
 ### 6 — security remediation
 
@@ -244,16 +266,16 @@ The hard gate, on the image that is about to ship:
 - no HIGH/CRITICAL library CVEs
 - no CRITICAL OS CVEs
 
-### 8 — export the artifact
+### 8 — export the artifacts
 
 ```bash
 ./manual/remote-run.sh 08
 ```
 
-`podman save | gzip`, plus the sha256. The artifact travels as a **file**,
-not through a registry — the DR site must be able to receive a promoted
-image even when the PROD registry is down. That is the whole point of a DR
-site.
+`podman save | gzip`, plus the sha256, for **both** images. The artifacts
+travel as **files**, not through a registry — the DR site must be able to
+receive a promoted image even when the PROD registry is down. That is the
+whole point of a DR site.
 
 ### 9 — deploy to both sites
 
@@ -261,9 +283,9 @@ site.
 ./manual/remote-run.sh 09
 ```
 
-`ansible-playbook site.yml` copies that one tarball to `.105` and `.104`.
-Each site loads it into its own rootless podman store and runs it as a
-systemd **user** unit. No root, no sudo password, no shared filesystem.
+`ansible-playbook site.yml` copies those two tarballs to `.105` and `.104`.
+Each site loads them into its own rootless podman store and runs them as
+systemd **user** units. No root, no sudo password, no shared filesystem.
 
 ### 10 — verify PROD
 
@@ -290,6 +312,22 @@ the second says the answer is real — the MCP process is actually holding port
 8095 on that host's socket table, so the hostname cannot have come from a
 canned string.
 
+Then the **page** is asked the same question, one layer up:
+
+```
+[app] page reports role     : PROD
+[app] page reports hostname : server-gateway.example.com
+[app] page talks to         : http://127.0.0.1:8095/mcp
+[app] MCP tools exposed     : 19
+[app] cluster tiles         : PROD=server-gateway.example.com (online) | DR=connection refused
+[app] PASS: http://192.168.147.105:8084/api/mcp/status is serving PROD (server-gateway.example.com)
+```
+
+The page asks its **own** MCP which site it is talking to, and the MCP
+answers with the hostname of the host that is serving the page. That is the
+chain `page -> MCP -> host`, and it is what makes the failover visible to a
+user.
+
 ### 11 — failover
 
 ```bash
@@ -298,8 +336,8 @@ canned string.
 
 This is the step where the MCP earns its place. It does three things in order:
 
-1. **Warm the standby** — `dr-warmup.yml` starts the DR MCP and waits for the
-   port. PROD keeps serving throughout.
+1. **Warm the standby** — `dr-warmup.yml` starts the DR MCP **and** the DR
+   page, and waits for both ports. PROD keeps serving throughout.
 2. **The readiness gate** — the MCP asks the DR site what it can see of
    *itself*, and the answer is checked:
 
@@ -332,19 +370,26 @@ BLOCKED: the DR site is not fit to take over. Rolling back.
    A standby that cannot hold the load is never promoted. That is the whole
    reason for putting the MCP in front of the cutover.
 
-3. **The cutover** — stops the PROD MCP, promotes DR, and asks again:
+3. **The cutover** — stops the PROD page and the PROD MCP, promotes DR, and
+   asks again:
 
 ```
 [verify] PASS: http://192.168.147.104:8095/mcp is serving localhost.localdomain
+[app]    PASS: http://192.168.147.104:8084/api/mcp/status is serving DR (localhost.localdomain)
 ```
 
-The PROD endpoint is now dead — the script shows that too.
+**Order matters.** On the way down the page goes first — a page whose MCP has
+gone would show a broken panel. On the way up the MCP goes first — the
+page's panel has nothing to ask until the MCP answers.
 
-> **One honest caveat.** The *service* moves for real — the unit is stopped on
-> one host and started on the other. The *client's* endpoint is changed by the
-> caller, because an address that survives a cutover needs a floating IP, and
-> moving an address between hosts needs root on the target. This lab does not
-> give the deploy user root; production DR uses VRRP/keepalived or
+The PROD endpoint is now dead — the script shows that too, for the MCP and
+for the page.
+
+> **One honest caveat.** The *service* moves for real — the units are stopped
+> on one host and started on the other. The *client's* endpoint is changed by
+> the caller, because an address that survives a cutover needs a floating IP,
+> and moving an address between hosts needs root on the target. This lab does
+> not give the deploy user root; production DR uses VRRP/keepalived or
 > pacemaker + corosync with fencing instead. Everything else in the drill is
 > real.
 
@@ -355,7 +400,8 @@ The PROD endpoint is now dead — the script shows that too.
 ```
 
 The exact inverse. PROD answers again, and the listening-ports proof shows the
-MCP process is back on 8095 on the PROD host.
+MCP process is back on 8095 on the PROD host. The page comes back too, and
+its panel says PROD again.
 
 ### 13 — the evidence
 
@@ -363,7 +409,8 @@ MCP process is back on 8095 on the PROD host.
 ./manual/remote-run.sh 13
 ```
 
-Both sites, different machines, the same image ID and the same layers:
+Both sites, different machines, the same image ID and the same layers — for
+**both** artifacts:
 
 ```
   192.168.147.105    image id  ec616084ab360b11f21b9d90a4ed825cd39d795770c43e67eceebf7253a946aa
@@ -374,7 +421,7 @@ Both sites, different machines, the same image ID and the same layers:
        2  sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef
        ...
 
-PASS: both sites run the SAME image (ec616084ab36)
+PASS: both sites run the SAME MCP image (ec616084ab36)
       and every one of its layers is byte-identical
 ```
 
@@ -395,15 +442,17 @@ Everything lands in `manual-reports/` on the control plane:
 
 | File | What it is |
 |---|---|
-| `aqua-report.html` | the Aqua compliance report |
-| `aqua-scan.err` | the scanner's own log |
+| `aqua-report.html` | the Aqua compliance report (MCP) |
+| `aqua-report-app.html` | the Aqua compliance report (app) |
+| `aqua-scan.err` / `aqua-scan-app.err` | the scanner's own log |
 | `trivy-report.json` / `trivy-report.txt` | the baseline library scan (machine + human readable) |
-| `trivy-os-report.txt` | the baseline OS scan |
+| `trivy-os-report.txt` | the baseline OS scan (MCP) |
+| `trivy-app-os-report.txt` | the OS scan of the app image |
 | `pip-list.txt` | what is really installed in the upstream image |
 | `cve-fixes.txt` | the packages the remediation upgraded |
 | `trivy-final-report.txt` | the final library gate |
 | `trivy-final-os-report.txt` | the final OS gate |
-| `image-inspect.json` | the image ID and digest from both sites |
+| `image-inspect.txt` | the image ID and digest from both sites, for both artifacts |
 | `failover-transcript.txt` | the PROD → DR → PROD transcript |
 
 The transcript is the same file the Jenkins job archives:
@@ -442,9 +491,13 @@ The transcript is the same file the Jenkins job archives:
 - **`remote-run.sh` does NOT sync the state file** — it is excluded from the
   copy on purpose, so a fresh `FULL_IMAGE` does not overwrite the one the
   later steps are using. The flip side: it does **not** follow a deploy
-  either. If the pipeline shipped a newer image, `FULL_IMAGE` still points
-  at the old tag and steps 11–13 fail on the image inspect. Point it at the
-  deployed tag before running the drill.
+  either. If the pipeline shipped a newer image, `FULL_IMAGE` and
+  `APP_FULL_IMAGE` still point at the old tags and steps 11–13 fail on the
+  image inspect. Point them at the deployed tags before running the drill.
+- **Both service ports have to be open on both sites** — 8095 for the MCP and
+  8084 for the page. A site whose firewall only knows 8095 fails the drill's
+  page check with `No route to host` even though the page is up and
+  listening locally. See ../RUNBOOK.md.
 - **Step 02 can be re-run** to get a new version number — it increments the
   counter in the state file.
 - **The build takes a while** (the upstream image installs a Python venv

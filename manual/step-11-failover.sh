@@ -5,13 +5,16 @@
 # Mirrors the Jenkins stage "Failover Drill". This is a REAL state change,
 # not a routing trick:
 #
-#   1. the DR standby is warmed up (its MCP is started) — PROD keeps serving
+#   1. the DR standby is warmed up (its MCP and its page are started) — PROD
+#      keeps serving
 #   2. the MCP READINESS PROBE asks the DR site what it can see of itself
 #      and gates on the answer
-#   3. the PROD MCP container is stopped  -> the PROD endpoint goes away
-#   4. the DR MCP container is started   -> the DR endpoint answers
+#   3. the PROD page is stopped, then the PROD MCP container
+#      -> the PROD endpoint goes away
+#   4. the DR MCP container is started, then the DR page
+#      -> the DR endpoint answers, and the SAME page answers from DR
 #
-# The SAME image is now serving, but the answer identifies the DR host.
+# The SAME images are now serving, but the answer identifies the DR host.
 #
 # Step 2 is the point of the whole exercise: a standby that cannot hold the
 # load is NEVER promoted. If the probe fails, the drill rolls back to the
@@ -27,7 +30,7 @@ banner "Step 11 — failover: stand PROD down, promote DR"
 step_start 11 "the PROD site goes down, the DR site takes over"
 
 state_load
-require_state FULL_IMAGE
+require_state FULL_IMAGE APP_FULL_IMAGE
 
 ensure_ansible_on_path
 
@@ -85,10 +88,23 @@ verify_mcp \
 
 echo "" | tee -a "${TRANSCRIPT}"
 
+# The page moved with the MCP — the same proof, one layer up.
+verify_app \
+    "http://${DR_HOST}:${APP_PORT}/api/mcp/status" \
+    "${DR_EXPECT}" \
+    DR \
+    PROD \
+    "${APP_FULL_IMAGE}" \
+    || { echo "${C_RED}BLOCKED: after failover the page did not report ${DR_EXPECT} on the DR site${C_RESET}"; exit 1; }
+
+echo "" | tee -a "${TRANSCRIPT}"
+
 echo ""
 note "the PROD endpoint is now down. Ask it anything — it will not answer:"
 curl -s -o /dev/null -w "  http://${PROD_HOST}:${MCP_PORT}${MCP_PATH} -> HTTP %{http_code}\n" \
     --connect-timeout 5 "http://${PROD_HOST}:${MCP_PORT}${MCP_PATH}" || echo "  connection refused (expected)"
+curl -s -o /dev/null -w "  http://${PROD_HOST}:${APP_PORT}/            -> HTTP %{http_code}\n" \
+    --connect-timeout 5 "http://${PROD_HOST}:${APP_PORT}/" || echo "  connection refused (expected)"
 
 step_end 11
 echo ""

@@ -20,6 +20,13 @@
 #      MCP did not return a canned string, it really reached the host's
 #      kernel over SSH and read its socket table.
 #
+# And then the PAGE is asked the same question, through the MCP:
+#
+#   3. GET /api/mcp/status    -> the page reports PROD and the PROD
+#      hostname, because its panel asks its OWN MCP which site it is
+#      talking to. That is the chain page -> MCP -> host, and it is what
+#      makes the failover visible to a user and not just to the MCP.
+#
 #   ./manual/step-10-verify-prod.sh
 # ---------------------------------------------------------------------------
 
@@ -30,7 +37,7 @@ banner "Step 10 — verify PROD"
 step_start 10 "asking the PROD endpoint who it is"
 
 state_load
-require_state FULL_IMAGE
+require_state FULL_IMAGE APP_FULL_IMAGE
 
 cd "${WORKDIR}"
 mkdir -p "${REPORT_DIR}"
@@ -46,6 +53,17 @@ verify_mcp \
     --call get_listening_ports \
     --assert "get_listening_ports=${MCP_PORT}" \
     || { echo "${C_RED}BLOCKED: the PROD endpoint did not answer as ${PROD_EXPECT}${C_RESET}"; exit 1; }
+
+echo "" | tee -a "${TRANSCRIPT}"
+
+# ---- the page, end to end --------------------------------------------------
+verify_app \
+    "http://${PROD_HOST}:${APP_PORT}/api/mcp/status" \
+    "${PROD_EXPECT}" \
+    PROD \
+    DR \
+    "${APP_FULL_IMAGE}" \
+    || { echo "${C_RED}BLOCKED: the app on PROD did not report ${PROD_EXPECT}${C_RESET}"; exit 1; }
 
 echo "" | tee -a "${TRANSCRIPT}"
 

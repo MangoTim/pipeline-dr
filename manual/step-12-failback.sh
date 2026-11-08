@@ -4,8 +4,8 @@
 #
 # Mirrors the Jenkins stage "Failback". The exact inverse of step 11:
 #
-#   1. the DR MCP container is stopped
-#   2. the PROD MCP container is started again
+#   1. the DR page is stopped, then the DR MCP container
+#   2. the PROD MCP container is started again, then the PROD page
 #
 # After this the PROD endpoint answers again. The listening-ports proof shows
 # the MCP process is back on 8095 on the PROD host — the same artifact, the
@@ -21,7 +21,7 @@ banner "Step 12 — failback: return to PROD"
 step_start 12 "the DR site goes down, PROD comes back"
 
 state_load
-require_state FULL_IMAGE
+require_state FULL_IMAGE APP_FULL_IMAGE
 
 ensure_ansible_on_path
 
@@ -42,6 +42,16 @@ verify_mcp \
     --call get_listening_ports \
     --assert "get_listening_ports=${MCP_PORT}" \
     || { echo "${C_RED}BLOCKED: after failback the PROD endpoint did not answer as ${PROD_EXPECT}${C_RESET}"; exit 1; }
+
+echo "" | tee -a "${TRANSCRIPT}"
+
+verify_app \
+    "http://${PROD_HOST}:${APP_PORT}/api/mcp/status" \
+    "${PROD_EXPECT}" \
+    PROD \
+    DR \
+    "${APP_FULL_IMAGE}" \
+    || { echo "${C_RED}BLOCKED: after failback the page did not report ${PROD_EXPECT} on the PROD site${C_RESET}"; exit 1; }
 
 echo "" | tee -a "${TRANSCRIPT}"
 

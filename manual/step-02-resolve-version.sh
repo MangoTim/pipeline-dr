@@ -34,13 +34,20 @@ BASE_IMAGE="${IMAGE_NAME}:${IMAGE_VERSION}"
 REMEDIATED_IMAGE="${IMAGE_NAME}-remediated:${IMAGE_VERSION}"
 ARTIFACT="${IMAGE_NAME}-${IMAGE_VERSION}.tar.gz"
 
+# The app ships as the SAME release — one version, two artifacts, one pair.
+APP_BASE_IMAGE="${APP_IMAGE_NAME}:${IMAGE_VERSION}"
+APP_ARTIFACT="${APP_IMAGE_NAME}-${IMAGE_VERSION}.tar.gz"
+
 state_save \
     "MANUAL_RUN=${SEQ}" \
     "IMAGE_VERSION=${IMAGE_VERSION}" \
     "BASE_IMAGE=${BASE_IMAGE}" \
     "REMEDIATED_IMAGE=${REMEDIATED_IMAGE}" \
     "FULL_IMAGE=${BASE_IMAGE}" \
-    "ARTIFACT=${ARTIFACT}"
+    "ARTIFACT=${ARTIFACT}" \
+    "APP_BASE_IMAGE=${APP_BASE_IMAGE}" \
+    "APP_FULL_IMAGE=${APP_BASE_IMAGE}" \
+    "APP_ARTIFACT=${APP_ARTIFACT}"
 
 note "VERSION file     : ${BASE}"
 note "Hong Kong date   : ${DAY}"
@@ -50,6 +57,8 @@ note "image version    : ${IMAGE_VERSION}"
 note "pre-remediation  : ${BASE_IMAGE}"
 note "post-remediation : ${REMEDIATED_IMAGE}"
 note "artifact         : ${ARTIFACT}"
+note "app image        : ${APP_BASE_IMAGE}"
+note "app artifact     : ${APP_ARTIFACT}"
 
 step_end 02
 echo ""

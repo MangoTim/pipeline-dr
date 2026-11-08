@@ -36,6 +36,7 @@ echo "--- the repository checkout ---"
 [ -d "${WORKDIR}" ] || die "the checkout ${WORKDIR} does not exist"
 [ -f "${WORKDIR}/Jenkinsfile" ] || die "${WORKDIR}/Jenkinsfile is missing"
 [ -f "${WORKDIR}/scripts/mcp_verify.py" ] || die "${WORKDIR}/scripts/mcp_verify.py is missing"
+[ -f "${WORKDIR}/scripts/app_verify.py" ] || die "${WORKDIR}/scripts/app_verify.py is missing"
 [ -f "${WORKDIR}/scripts/trivy_cve_packages.py" ] || die "${WORKDIR}/scripts/trivy_cve_packages.py is missing"
 [ -f "${WORKDIR}/ansible/inventory.ini" ] || die "${WORKDIR}/ansible/inventory.ini is missing"
 note "OK   the checkout looks complete"
@@ -58,6 +59,17 @@ for host in "${PROD_HOST}" "${DR_HOST}"; do
         note "OK   ${host}:${MCP_PORT} answers"
     else
         warn "${host}:${MCP_PORT} does not answer right now."
+        warn "     That is expected before the first deploy — the sites come up in step 09."
+    fi
+done
+echo ""
+
+echo "--- the page port on both sites ---"
+for host in "${PROD_HOST}" "${DR_HOST}"; do
+    if curl -s -o /dev/null --connect-timeout 5 "http://${host}:${APP_PORT}/api/mcp/status"; then
+        note "OK   ${host}:${APP_PORT} answers"
+    else
+        warn "${host}:${APP_PORT} does not answer right now."
         warn "     That is expected before the first deploy — the sites come up in step 09."
     fi
 done

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# Step 13 — prove both sites run the SAME artifact.
+# Step 13 — prove both sites run the SAME artifacts.
 #
 # Not a Jenkins stage — this is the evidence that ties the demo together.
 # The PROD site and the DR site are different machines, but they load the
-# same tarball, so the image they run MUST be identical.
+# same tarballs, so the images they run MUST be identical.
 #
 # What is compared, and what it means:
 #
@@ -25,11 +25,11 @@
 # shellcheck source=lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-banner "Step 13 — the same artifact on both sites"
+banner "Step 13 — the same artifacts on both sites"
 step_start 13 "comparing the image ID and the layers on PROD and DR"
 
 state_load
-require_state FULL_IMAGE
+require_state FULL_IMAGE APP_FULL_IMAGE
 
 cd "${WORKDIR}"
 mkdir -p "${REPORT_DIR}"
@@ -37,52 +37,69 @@ mkdir -p "${REPORT_DIR}"
 KEY="${HOME}/.ssh/id_rhai108_rsa"
 [ -r "${KEY}" ] || die "the pipeline SSH key ${KEY} is missing or unreadable"
 
-# The deploy user on each site — the same accounts Ansible drives.
-inspect_site() {
-    local target="$1"
-    ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
-        -i "${KEY}" "${target}" \
-        "podman image inspect $(local_ref "${FULL_IMAGE}") --format 'Id={{.Id}} Digest={{.Digest}} Layers={{.RootFS.Layers}}'"
+# Compare ONE image across the two sites and gate on the result.
+#
+#   usage: compare_image <image-ref> <label>
+compare_image() {
+    local image="$1" label="$2"
+
+    # The deploy user on each site — the same accounts Ansible drives.
+    local inspect_site
+    inspect_site() {
+        local target="$1"
+        ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+            -i "${KEY}" "${target}" \
+            "podman image inspect $(local_ref "${image}") --format 'Id={{.Id}} Digest={{.Digest}} Layers={{.RootFS.Layers}}'"
+    }
+
+    local prod_out dr_out
+    prod_out=$(inspect_site "${PROD_USER}@${PROD_HOST}") || die "could not inspect the PROD site"
+    dr_out=$(inspect_site "${DR_USER}@${DR_HOST}")     || die "could not inspect the DR site"
+
+    {
+        echo "--- ${label} (${image}) ---"
+        echo "PROD ${PROD_USER}@${PROD_HOST}: ${prod_out}"
+        echo "DR   ${DR_USER}@${DR_HOST}: ${dr_out}"
+    } | tee -a "${REPORT_DIR}/image-inspect.txt"
+
+    local prod_id dr_id prod_digest dr_digest prod_layers dr_layers
+    prod_id=$(echo "${prod_out}"     | sed -n 's/^Id=\([^ ]*\).*/\1/p')
+    dr_id=$(echo "${dr_out}"         | sed -n 's/^Id=\([^ ]*\).*/\1/p')
+    prod_digest=$(echo "${prod_out}" | sed -n 's/^.*Digest=\([^ ]*\).*/\1/p')
+    dr_digest=$(echo "${dr_out}"     | sed -n 's/^.*Digest=\([^ ]*\).*/\1/p')
+    prod_layers=$(echo "${prod_out}" | sed -n 's/^.*Layers=//p')
+    dr_layers=$(echo "${dr_out}"     | sed -n 's/^.*Layers=//p')
+
+    echo ""
+    printf '  %-18s image id  %s\n' "${PROD_HOST}" "${prod_id}"
+    printf '  %-18s image id  %s\n' "${DR_HOST}"   "${dr_id}"
+    echo ""
+    echo "  layers (identical content, in order):"
+    echo "${prod_layers}" | tr -d '[]' | tr ' ' '\n' | grep -v '^$' | nl -w4 -s'  ' | sed 's/^/    /'
+    echo ""
+    printf '  manifest digest  PROD %s\n' "${prod_digest}"
+    printf '  manifest digest  DR   %s\n' "${dr_digest}"
+    if [ "${prod_digest}" != "${dr_digest}" ]; then
+        note "(the manifest digests differ because each site rebuilds the manifest with"
+        note " its own podman build — the image ID and every layer are identical)"
+    fi
+    echo ""
+
+    [ -n "${prod_id}" ] && [ "${prod_id}" = "${dr_id}" ] \
+        || { echo "${C_RED}FAIL: the sites run DIFFERENT ${label} images${C_RESET}"; exit 1; }
+
+    [ "${prod_layers}" = "${dr_layers}" ] \
+        || { echo "${C_RED}FAIL: the ${label} layer digests differ${C_RESET}"; exit 1; }
+
+    echo "${C_GREEN}PASS: both sites run the SAME ${label} image (${prod_id:0:12})${C_RESET}"
+    echo "${C_GREEN}      and every one of its layers is byte-identical${C_RESET}"
+    echo ""
 }
 
-PROD_OUT=$(inspect_site "${PROD_USER}@${PROD_HOST}") || die "could not inspect the PROD site"
-DR_OUT=$(inspect_site "${DR_USER}@${DR_HOST}")     || die "could not inspect the DR site"
+: > "${REPORT_DIR}/image-inspect.txt"
 
-{
-    echo "PROD ${PROD_USER}@${PROD_HOST}: ${PROD_OUT}"
-    echo "DR   ${DR_USER}@${DR_HOST}: ${DR_OUT}"
-} | tee "${REPORT_DIR}/image-inspect.txt"
-
-PROD_ID=$(echo "${PROD_OUT}"     | sed -n 's/^Id=\([^ ]*\).*/\1/p')
-DR_ID=$(echo "${DR_OUT}"         | sed -n 's/^Id=\([^ ]*\).*/\1/p')
-PROD_DIGEST=$(echo "${PROD_OUT}" | sed -n 's/^.*Digest=\([^ ]*\).*/\1/p')
-DR_DIGEST=$(echo "${DR_OUT}"     | sed -n 's/^.*Digest=\([^ ]*\).*/\1/p')
-PROD_LAYERS=$(echo "${PROD_OUT}" | sed -n 's/^.*Layers=//p')
-DR_LAYERS=$(echo "${DR_OUT}"     | sed -n 's/^.*Layers=//p')
-
-echo ""
-printf '  %-18s image id  %s\n' "${PROD_HOST}" "${PROD_ID}"
-printf '  %-18s image id  %s\n' "${DR_HOST}"   "${DR_ID}"
-echo ""
-echo "  layers (identical content, in order):"
-echo "${PROD_LAYERS}" | tr -d '[]' | tr ' ' '\n' | grep -v '^$' | nl -w4 -s'  ' | sed 's/^/    /'
-echo ""
-printf '  manifest digest  PROD %s\n' "${PROD_DIGEST}"
-printf '  manifest digest  DR   %s\n' "${DR_DIGEST}"
-if [ "${PROD_DIGEST}" != "${DR_DIGEST}" ]; then
-    note "(the manifest digests differ because each site rebuilds the manifest with"
-    note " its own podman build — the image ID and every layer are identical)"
-fi
-echo ""
-
-[ -n "${PROD_ID}" ] && [ "${PROD_ID}" = "${DR_ID}" ] \
-    || { echo "${C_RED}FAIL: the sites run DIFFERENT images${C_RESET}"; exit 1; }
-
-[ "${PROD_LAYERS}" = "${DR_LAYERS}" ] \
-    || { echo "${C_RED}FAIL: the layer digests differ${C_RESET}"; exit 1; }
-
-echo "${C_GREEN}PASS: both sites run the SAME image (${PROD_ID:0:12})${C_RESET}"
-echo "${C_GREEN}      and every one of its layers is byte-identical${C_RESET}"
+compare_image "${FULL_IMAGE}" "MCP"
+compare_image "${APP_FULL_IMAGE}" "app"
 
 step_end 13
 echo ""
