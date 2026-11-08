@@ -123,7 +123,7 @@ pipeline {
         // workload that moves between the two sites. Pinned to the exact
         // commit, fetched from GitHub at build time — nothing is vendored.
         APP_REPO       = 'MangoTim/aqua-rolltable-demo'
-        APP_COMMIT     = '70cd368e2de73482fad8618429c008c4f998a589'
+        APP_COMMIT     = '2e745904cb7f21e18cbf9b2a1881168a0ff5ed3b'
         APP_IMAGE_NAME = 'lunch-rolltable'
 
         // The two sites of the demo.

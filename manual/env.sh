@@ -48,7 +48,7 @@ MCP_COMMIT="6d7ca1d1da8598c2e816fd69e98b8f7cf97da0d1"
 # The second artifact's source. Pinned to an exact commit, fetched from
 # GitHub at build time, exactly like the MCP source — nothing is vendored.
 APP_REPO="MangoTim/aqua-rolltable-demo"
-APP_COMMIT="70cd368e2de73482fad8618429c008c4f998a589"
+APP_COMMIT="2e745904cb7f21e18cbf9b2a1881168a0ff5ed3b"
 
 # --- images and scanners ----------------------------------------------------
 IMAGE_NAME="rhel-mcp"
