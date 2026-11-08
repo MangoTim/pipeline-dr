@@ -1,0 +1,225 @@
+// ===========================================================================
+// mcp-failback — the way back to PROD, as a job of its own.
+//
+// WHY THIS IS SEPARATE FROM THE mcp-dr-pipeline BUILD
+//
+// Failover and failback are two different decisions, made at two different
+// times. You fail over because there is an incident. You fail back when the
+// incident is over — minutes later, or the next morning. Fusing the two into
+// one CI build forces the failback to happen the instant the drill starts,
+// and a build that is interrupted between them leaves the site on the
+// standby.
+//
+// So the drill lives in jobs you trigger when you mean it: mcp-failover to
+// move the service to the standby, mcp-failback to bring it back.
+//
+// WHAT THIS JOB DOES
+//
+//   1. resolve the artifact that is deployed RIGHT NOW (no build, no scan)
+//   2. stop the DR site and bring PROD back — the exact inverse of
+//      failover.yml
+//   3. prove the PROD endpoint answers as the PROD site
+//
+// The job is safe to run at any time: every step it performs is idempotent.
+// Run it before any failover and it is a no-op that still proves the PROD
+// endpoint answers.
+// ===========================================================================
+
+pipeline {
+    agent any
+
+    environment {
+        // The two sites of the demo.
+        PROD_HOST     = '192.168.147.105'
+        DR_HOST       = '192.168.147.104'
+        MCP_PORT      = '8095'
+        MCP_PATH      = '/mcp'
+        APP_PORT      = '8084'
+
+        // The hostname each site reports when the MCP inspects it. These are
+        // the PROOF of which site is serving: same image, different answer.
+        PROD_EXPECT   = 'server-gateway.example.com'
+        DR_EXPECT     = 'localhost.localdomain'
+
+        // The bare repo inside the Jenkins container, served by the local git
+        // daemon. git:// and NOT file:// — the git plugin refuses to check
+        // out a local directory, and that flag is read once at class load.
+        GIT_ORIGIN    = 'git://127.0.0.1:9418/mcp-dr-pipeline.git'
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 20, unit: 'MINUTES')
+        disableConcurrentBuilds()
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                git branch: 'main', url: env.GIT_ORIGIN
+            }
+        }
+
+        stage('Resolve the deployed artifact') {
+            // The drill does not build anything, so it must not guess what is
+            // deployed either. The image is read from the systemd unit of the
+            // site — the unit survives the service being stopped, so this
+            // works whether or not a failover is currently in effect.
+            steps {
+                sh '''
+                    set -eu
+                    source "${WORKSPACE}/scripts/drill_common.sh"
+                    export ANSIBLE_PRIVATE_KEY_FILE="${JENKINS_HOME}/.ssh/id_rhai108_rsa"
+
+                    drill_log "===== the artifact that is deployed right now ====="
+
+                    IMAGE="$(drill_deployed_image)"
+                    if [ -z "${IMAGE}" ]; then
+                        echo "the control plane has no rhel-mcp.service unit — nothing is deployed" >&2
+                        exit 1
+                    fi
+                    drill_log "  MCP image : ${IMAGE}"
+
+                    if drill_app_deployed; then
+                        drill_log "  app image : $(drill_app_image)"
+                        APP="$(drill_app_image)"
+                    else
+                        drill_log "  app       : not deployed on this pair — the MCP is verified only"
+                        APP=""
+                    fi
+
+                    drill_state_save "DEPLOYED_IMAGE=${IMAGE}" "DEPLOYED_APP_IMAGE=${APP}"
+                '''
+
+                // Publish the resolved artifact to the job, so the
+                // notification can name it.
+                script {
+                    if (fileExists("${env.WORKSPACE}/.drill-state.env")) {
+                        readFile(file: "${env.WORKSPACE}/.drill-state.env").eachLine { line ->
+                            def parts = line.split('=', 2)
+                            if (parts.length == 2) {
+                                env[parts[0]] = parts[1]
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Failback') {
+            // The exact inverse of failover.yml: the DR page goes down, then
+            // the DR MCP; the PROD MCP comes up first, then the PROD page.
+            steps {
+                sh '''
+                    set -eu
+                    source "${WORKSPACE}/scripts/drill_common.sh"
+                    export ANSIBLE_PRIVATE_KEY_FILE="${JENKINS_HOME}/.ssh/id_rhai108_rsa"
+
+                    drill_ansible failback.yml
+                '''
+            }
+        }
+
+        stage('Verify the PROD site') {
+            // The same MCP session the main pipeline runs, pointed at the PROD
+            // endpoint. The answer identifies the PROD host — the same
+            // artifact, back on the original site.
+            steps {
+                sh '''
+                    set -eu
+                    source "${WORKSPACE}/scripts/drill_common.sh"
+                    drill_state_load
+
+                    drill_log "===== FAILBACK: PROD is serving again ====="
+
+                    drill_verify_mcp \
+                        "http://${PROD_HOST}:${MCP_PORT}${MCP_PATH}" \
+                        "${PROD_HOST}" \
+                        "${PROD_EXPECT}" \
+                        "${DEPLOYED_IMAGE}" \
+                        --call get_listening_ports \
+                        --assert "get_listening_ports=${MCP_PORT}" \
+                        || { drill_log "BLOCKED: after failback the PROD endpoint did not answer as ${PROD_EXPECT}"; exit 1; }
+                    drill_log ""
+
+                    if [ -n "${DEPLOYED_APP_IMAGE}" ]; then
+                        drill_verify_app \
+                            "http://${PROD_HOST}:${APP_PORT}/api/mcp/status" \
+                            "${PROD_EXPECT}" \
+                            PROD \
+                            DR \
+                            "${DEPLOYED_APP_IMAGE}" \
+                            || { drill_log "BLOCKED: after failback the page did not report ${PROD_EXPECT} on the PROD site"; exit 1; }
+                        drill_log ""
+                    fi
+                '''
+            }
+        }
+
+        stage('The DR endpoint is gone') {
+            // The pair is back in the intended posture: PROD serving, DR
+            // stopped and ready to take over again.
+            steps {
+                sh '''
+                    set -u
+                    source "${WORKSPACE}/scripts/drill_common.sh"
+
+                    drill_log "===== the standby ====="
+                    if curl -s -o /dev/null --connect-timeout 5 \
+                            "http://${DR_HOST}:${MCP_PORT}${MCP_PATH}"; then
+                        drill_log "  http://${DR_HOST}:${MCP_PORT}${MCP_PATH} still answers — the failback did not take"
+                        exit 1
+                    fi
+                    drill_log "  http://${DR_HOST}:${MCP_PORT}${MCP_PATH}   -> connection refused (expected)"
+                    drill_log "  http://${PROD_HOST}:${MCP_PORT}${MCP_PATH} -> the PROD site is serving"
+                '''
+            }
+        }
+    }
+
+    post {
+        always {
+            sh '''
+                # The verification containers run with --rm, but a FAILED run
+                # can leave one behind.
+                podman rm -f drill-verify-${BUILD_NUMBER} \
+                             drill-probe-${BUILD_NUMBER} 2>/dev/null || true
+            '''
+
+            archiveArtifacts artifacts: 'drill-transcript.txt',
+                             allowEmptyArchive: true
+        }
+        success {
+            emailext (
+                subject: "✅ FAILBACK — PROD is serving (build #${BUILD_NUMBER})",
+                body: """<h2>PROD/DR drill — failback</h2>
+                    <p>Artifact: <code>${env.DEPLOYED_IMAGE}</code> (already deployed — this job does not build)</p>
+                    <p>The DR site <code>${env.DR_HOST}</code> was stopped and PROD
+                       <code>${env.PROD_HOST}</code> was restored. The MCP answered as
+                       <code>${env.PROD_EXPECT}</code>.</p>
+                    <p>Posture: PROD live, DR stopped and ready to take over.</p>
+                    <p>Transcript: <a href="${BUILD_URL}artifact/">drill-transcript.txt</a><br>
+                       Console: <a href="${BUILD_URL}console">build console</a></p>
+                """,
+                mimeType: 'text/html',
+                to: 'tim.wong@systex.com.hk'
+            )
+        }
+        failure {
+            emailext (
+                subject: "❌ FAILBACK failed — PROD/DR drill (build #${BUILD_NUMBER})",
+                body: """<h2>PROD/DR drill — failback FAILED</h2>
+                    <p>Artifact: <code>${env.DEPLOYED_IMAGE ?: 'unresolved'}</code></p>
+                    <p>The PROD site was not confirmed as serving. Check the console for
+                       the failing stage and run <b>mcp-failback</b> again.</p>
+                    <p>Transcript: <a href="${BUILD_URL}artifact/">drill-transcript.txt</a><br>
+                       Console: <a href="${BUILD_URL}console">build console</a></p>
+                """,
+                mimeType: 'text/html',
+                attachLog: true,
+                to: 'tim.wong@systex.com.hk'
+            )
+        }
+    }
+}
