@@ -1,18 +1,26 @@
 ---
-# Deploy the RHEL MCP server to every site in the inventory.
+# Deploy the RHEL MCP server AND the Lunch Rolltable app to every site.
 #
-# The SAME image tarball (built and scanned once by the pipeline) is copied to
-# every site and loaded there. The DR site therefore never depends on the PROD
-# registry — the artifact travels with the pipeline, which is what a real DR
-# promotion looks like.
+# The SAME image tarball for each artifact (built and scanned once by the
+# pipeline) is copied to every site and loaded there. The DR site therefore
+# never depends on the PROD registry — the artifacts travel with the
+# pipeline, which is what a real DR promotion looks like.
+#
+# Two artifacts:
+#   * the MCP server   — the inspector, the only privileged component
+#   * the rolltable    — the user-facing page; its panel asks the MCP which
+#                        site it is talking to
 #
 # Required extra vars:
 #   -e mcp_image=rhel-mcp:v1.0.28102601
 #   -e mcp_artifact=/path/on/controller/rhel-mcp-v1.0.28102601.tar.gz
+#   -e rolltable_image=lunch-rolltable:v1.0.28102601
+#   -e rolltable_artifact=/path/on/controller/lunch-rolltable-v1.0.28102601.tar.gz
 
-- name: Deploy the RHEL MCP server to all sites
+- name: Deploy the RHEL MCP server and the Lunch Rolltable app to all sites
   hosts: mcp_sites
   gather_facts: true
   become: false
   roles:
     - role: mcp
+    - role: rolltable

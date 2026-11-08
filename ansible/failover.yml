@@ -2,10 +2,17 @@
 # FAILOVER: promote the DR site and stand the PROD site down.
 #
 # This is a real state change, not a routing trick:
-#   1. the PROD MCP container is stopped  -> the PROD endpoint goes away
-#   2. the DR MCP container is ensured up -> the DR endpoint answers
+#   1. the PROD page is stopped     -> the page goes away
+#   2. the PROD MCP container is stopped  -> the PROD endpoint goes away
+#   3. the DR MCP container is ensured up  -> the DR endpoint answers
+#   4. the DR page is started       -> the same page now answers from DR
 #
-# After this playbook, a client that asks the DR site reports DR state.
+# After this playbook, a client that asks the DR site reports DR state, and
+# the page's own panel says DR.
+#
+# Order matters. On the way down the page goes first — a page whose MCP has
+# gone would show a broken panel. On the way up the MCP goes first — the
+# page's panel has nothing to ask until the MCP answers.
 
 - name: Fail over from PROD to DR
   hosts: mcp_prod
@@ -15,7 +22,17 @@
   # ...) are not loaded automatically. Pull them in explicitly.
   vars_files:
     - roles/mcp/defaults/main.yml
+    - roles/rolltable/defaults/main.yml
   tasks:
+    - name: Stop the rolltable app on the PROD site
+      ansible.builtin.command:
+        cmd: systemctl --user stop {{ rolltable_service_name }}
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid | default(1001) }}"
+      register: rolltable_prod_stop
+      changed_when: rolltable_prod_stop.rc == 0
+      failed_when: false
+
     - name: Stop the MCP server on the PROD site
       ansible.builtin.command:
         cmd: systemctl --user stop rhel-mcp.service
@@ -27,7 +44,7 @@
 
     - name: Report the PROD endpoint state
       ansible.builtin.debug:
-        msg: "PROD MCP stopped on {{ inventory_hostname }} (rc={{ mcp_prod_stop.rc | default('n/a') }})"
+        msg: "PROD stopped on {{ inventory_hostname }} (MCP rc={{ mcp_prod_stop.rc | default('n/a') }}, page rc={{ rolltable_prod_stop.rc | default('n/a') }})"
 
 - name: Promote the DR site
   hosts: mcp_dr
@@ -35,6 +52,7 @@
   become: false
   vars_files:
     - roles/mcp/defaults/main.yml
+    - roles/rolltable/defaults/main.yml
   tasks:
     - name: Ensure the MCP server is running on the DR site
       ansible.builtin.command:
@@ -52,6 +70,22 @@
         timeout: "{{ mcp_readiness_seconds }}"
         state: started
 
+    - name: Ensure the rolltable app is running on the DR site
+      ansible.builtin.command:
+        cmd: systemctl --user start {{ rolltable_service_name }}
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid | default(1001) }}"
+      register: rolltable_dr_start
+      changed_when: mcp_dr_start.rc == 0
+      failed_when: false
+
+    - name: Wait for the DR page to accept connections
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ rolltable_port }}"
+        timeout: "{{ rolltable_readiness_seconds }}"
+        state: started
+
     - name: Report the DR endpoint state
       ansible.builtin.debug:
-        msg: "DR MCP promoted on {{ inventory_hostname }} — the active site is now DR"
+        msg: "DR promoted on {{ inventory_hostname }} (MCP + page) — the active site is now DR"

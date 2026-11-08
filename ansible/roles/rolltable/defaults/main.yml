@@ -1,0 +1,58 @@
+---
+# Defaults for the Lunch Rolltable role.
+#
+# The app is the pipeline's SECOND artifact: the same tarball is copied to
+# every site, so both sites serve byte-identical content. During a failover
+# drill the page moves together with the MCP — the page and the panel that
+# talks to it are never separated.
+
+# The image reference as built and scanned by the pipeline, e.g.
+# -e rolltable_image=lunch-rolltable:v1.0.29102601.
+rolltable_image: "lunch-rolltable:latest"
+
+# Podman normalises a short image name into the "localhost/" registry, so the
+# tag that actually lands in the site's local store is "localhost/<name>".
+rolltable_image_ref: "localhost/{{ rolltable_image }}"
+rolltable_image_repo: "localhost/lunch-rolltable"
+
+# Path (on the Ansible controller) of the `podman save` tarball produced by the
+# pipeline. The role copies this exact file to every site.
+rolltable_artifact: ""
+rolltable_artifact_remote: "lunch-rolltable-image.tar.gz"
+
+# Container / service naming.
+rolltable_container_name: lunch-rolltable
+rolltable_service_name: lunch-rolltable.service
+
+# The port the page is served on.
+rolltable_port: 8084
+
+# The site's own MCP, over the loopback. Both containers run with
+# --network host, so the app reaches the MCP on 127.0.0.1.
+#
+# The app NEVER gets the SSH key. The MCP is the only privileged component:
+# it inspects the host over SSH as the site's own deploy user, and the app
+# only speaks HTTP to it.
+rolltable_mcp_host: "127.0.0.1"
+rolltable_mcp_port: 8095
+rolltable_mcp_path: /mcp
+rolltable_mcp_service_name: "rhel-mcp.service"
+
+# Which site is this, and which is the peer? The peer tile in the page's
+# panel is answered by the PEER site's MCP, so it flips to "connection
+# refused" the moment the peer goes down.
+rolltable_site_role: "{{ 'PROD' if 'mcp_prod' in group_names else 'DR' }}"
+rolltable_site_host: "{{ ansible_host | default(inventory_hostname) }}"
+rolltable_peer_role: "{{ 'DR' if 'mcp_prod' in group_names else 'PROD' }}"
+rolltable_peer_host: >-
+  {{ (groups['mcp_dr'] | first) if 'mcp_prod' in group_names
+     else (groups['mcp_prod'] | first) }}
+
+# The hostname each site reports when the MCP inspects it. The page shows the
+# live answer next to this expectation.
+rolltable_expected_hostname: >-
+  {{ 'server-gateway.example.com' if 'mcp_prod' in group_names
+     else 'localhost.localdomain' }}
+
+# Readiness.
+rolltable_readiness_seconds: 60

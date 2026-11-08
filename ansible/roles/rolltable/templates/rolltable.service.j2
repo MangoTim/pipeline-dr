@@ -1,0 +1,33 @@
+[Unit]
+Description=Lunch Rolltable ({{ rolltable_site_role }} site {{ inventory_hostname }})
+Documentation=https://github.com/MangoTim/aqua-rolltable-demo
+After=network-online.target
+Wants=network-online.target
+# The page's panel asks the site's own MCP over the loopback, so the MCP has
+# to be there for the page to be useful. The drill keeps the two together
+# anyway — the page is never up on a site whose MCP is down.
+After={{ rolltable_mcp_service_name }}
+Wants={{ rolltable_mcp_service_name }}
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+# --network host   the page is served directly on the host's port
+# --pull=never     the image is already in the site's local podman store;
+#                  never reach for a registry
+#
+# MCP_URL      the site's own MCP over the loopback — the app never gets the
+#              SSH key, the MCP is the only privileged component
+# PEER_URL     the other site's MCP — that is what makes the peer tile in the
+#              page's panel answer, and what makes it flip to "connection
+#              refused" during a failover drill
+ExecStart=/usr/bin/podman run --rm --name {{ rolltable_container_name }} --pull=never --network host -e HOST=0.0.0.0 -e PORT={{ rolltable_port }} -e MCP_URL=http://{{ rolltable_mcp_host }}:{{ rolltable_mcp_port }}{{ rolltable_mcp_path }} -e SITE_ROLE={{ rolltable_site_role }} -e SITE_HOST={{ rolltable_site_host }} -e SITE_EXPECT={{ rolltable_expected_hostname }} -e PEER_ROLE={{ rolltable_peer_role }} -e PEER_HOST={{ rolltable_peer_host }} -e PEER_URL=http://{{ rolltable_peer_host }}:{{ rolltable_mcp_port }}{{ rolltable_mcp_path }} -e APP_VERSION={{ rolltable_image }} {{ rolltable_image }}
+ExecStop=/usr/bin/podman stop -t 15 {{ rolltable_container_name }}
+ExecStopPost=/usr/bin/podman rm -f {{ rolltable_container_name }}
+
+[Install]
+WantedBy=default.target

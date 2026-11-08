@@ -1,11 +1,24 @@
 // Jenkinsfile — PROD/DR MCP pipeline demo
 //
 //   Jenkins (.105) → build Red Hat's linux-mcp-server → Aqua scan → Trivy
-//   → export artifact → Ansible deploy to .105 (PROD) and .104 (DR)
+//   → build the Lunch Rolltable app → Aqua scan → Trivy
+//   → export both artifacts → Ansible deploy to .105 (PROD) and .104 (DR)
 //   → verify → failover drill → failback
 //
-// One pipeline builds and scans ONE image, Ansible deploys that exact
-// artifact to BOTH sites, and the MCP answers from whichever site is live.
+// One pipeline builds and scans TWO images, Ansible deploys those exact
+// artifacts to BOTH sites, and the MCP answers from whichever site is live.
+//
+//   artifact A: rhel-mcp         the INSPECTOR — the only privileged
+//                               component. It SSHes into the host it runs on
+//                               and reports what it sees.
+//   artifact B: lunch-rolltable  the WORKLOAD — the page a user actually
+//                               looks at. Its panel asks the MCP which site
+//                               it is talking to, so the failover has a
+//                               user-visible consequence.
+//
+// The drill moves the page and the MCP together: a site whose page is up but
+// whose MCP is down would show a broken panel, and a site whose MCP is up but
+// whose page is down has nothing to show at all.
 //
 // ---------------------------------------------------------------------------
 // One-time setup required BEFORE the first build
@@ -106,11 +119,19 @@ pipeline {
         MCP_REPO      = 'rhel-lightspeed/linux-mcp-server'
         MCP_COMMIT    = '6d7ca1d1da8598c2e816fd69e98b8f7cf97da0d1'
 
+        // The second artifact: the Lunch Rolltable app, the user-facing
+        // workload that moves between the two sites. Pinned to the exact
+        // commit, fetched from GitHub at build time — nothing is vendored.
+        APP_REPO       = 'MangoTim/aqua-rolltable-demo'
+        APP_COMMIT     = '70cd368e2de73482fad8618429c008c4f998a589'
+        APP_IMAGE_NAME = 'lunch-rolltable'
+
         // The two sites of the demo.
         PROD_HOST     = '192.168.147.105'
         DR_HOST       = '192.168.147.104'
         MCP_PORT      = '8095'
         MCP_PATH      = '/mcp'
+        APP_PORT      = '8084'
 
         // The hostname each site reports when the MCP inspects it. These are
         // the PROOF of which site is serving: same image, different answer.
@@ -186,6 +207,29 @@ pipeline {
             }
         }
 
+        stage('Fetch App Source') {
+            // The app source is downloaded from GitHub at build time and pinned
+            // to an exact commit, exactly like the MCP source. The app is the
+            // pipeline's second artifact, so it follows the same rules: nothing
+            // is vendored, and what ships is the commit that was scanned.
+            steps {
+                sh '''
+                    set -eux
+                    rm -rf app-src app-src.tar.gz
+                    curl -fsSL --retry 3 --retry-delay 5 \
+                        -o app-src.tar.gz \
+                        "https://github.com/${APP_REPO}/archive/${APP_COMMIT}.tar.gz"
+                    mkdir -p app-src
+                    tar -xzf app-src.tar.gz -C app-src --strip-components=1
+                    test -f app-src/Dockerfile
+                    test -f app-src/serve.py
+                    test -f app-src/mcp_client.py
+                    echo "app source ready:"
+                    ls app-src
+                '''
+            }
+        }
+
         stage('Resolve Version') {
             steps {
                 script {
@@ -198,9 +242,16 @@ pipeline {
                     env.BASE_IMAGE    = "${env.IMAGE_NAME}:${env.IMAGE_VERSION}"
                     env.ARTIFACT      = "${env.IMAGE_NAME}-${env.IMAGE_VERSION}.tar.gz"
 
+                    // The app ships as the same release — one build, two
+                    // artifacts, one version.
+                    env.APP_FULL_IMAGE = "${env.APP_IMAGE_NAME}:${env.IMAGE_VERSION}"
+                    env.APP_ARTIFACT   = "${env.APP_IMAGE_NAME}-${env.IMAGE_VERSION}.tar.gz"
+
                     echo "Image version : ${env.IMAGE_VERSION}"
                     echo "Full image ref: ${env.FULL_IMAGE}"
                     echo "Artifact      : ${env.ARTIFACT}"
+                    echo "App image ref : ${env.APP_FULL_IMAGE}"
+                    echo "App artifact  : ${env.APP_ARTIFACT}"
                 }
             }
         }
@@ -228,6 +279,30 @@ pipeline {
                         upstream
 
                     podman image inspect ${FULL_IMAGE} --format 'id={{.Id}} size={{.Size}}'
+                '''
+            }
+        }
+
+        stage('Build App Image') {
+            // The same two flags as the MCP build:
+            //   --network host  the build has to reach the Debian registry and
+            //                   the apt mirrors. The host's firewalld FORWARD
+            //                   chain drops container egress, so a default
+            //                   bridge build hangs.
+            //   --format docker  what the scanners expect.
+            steps {
+                sh '''
+                    set -eux
+                    podman build \
+                        --file app-src/Dockerfile \
+                        --format docker \
+                        --network host \
+                        --tag ${APP_FULL_IMAGE} \
+                        --label build.number=${BUILD_NUMBER} \
+                        --label build.url=${BUILD_URL} \
+                        app-src
+
+                    podman image inspect ${APP_FULL_IMAGE} --format 'id={{.Id}} size={{.Size}}'
                 '''
             }
         }
@@ -285,6 +360,59 @@ pipeline {
             post {
                 always {
                     archiveArtifacts artifacts: 'aqua-report.html,aqua-scan.err',
+                                     allowEmptyArchive: true
+                }
+            }
+        }
+
+        stage('Aqua Image Scan (App)') {
+            // The same gate, the same console, the same policy — on the app
+            // image. Only the container name and the report file differ, so
+            // both artifacts' reports are archived side by side.
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: "${AQUA_CREDS_ID}",
+                    usernameVariable: 'AQUA_USER',
+                    passwordVariable: 'AQUA_PASSWORD'
+                )]) {
+                    sh '''
+                        set -u
+
+                        SCAN_RC=0
+                        podman run --rm --name aqua-scan-app-${BUILD_NUMBER} \
+                            --network host \
+                            --security-opt label=disable --user root \
+                            -v /var/run/docker.sock:/var/run/docker.sock \
+                            ${SCANNER_IMAGE} \
+                            scan \
+                                --host ${AQUA_HOST} \
+                                --local ${APP_FULL_IMAGE} \
+                                --no-verify \
+                                --user ${AQUA_USER} \
+                                --password ${AQUA_PASSWORD} \
+                                --html > aqua-report-app.html 2> aqua-scan-app.err || SCAN_RC=$?
+
+                        if [ "${SCAN_RC}" -ne 0 ]; then
+                            echo "--- Aqua scanner stderr ---"
+                            cat aqua-scan-app.err || true
+                            echo "--- Aqua scanner output ---"
+                            cat aqua-report-app.html || true
+                            echo ""
+                            echo "BLOCKED: Aqua scanner CLI exited ${SCAN_RC}"
+                            exit 1
+                        fi
+
+                        echo "--- Aqua scan summary (app) ---"
+                        grep -oE "Image Is (Compliant|Non-compliant)" aqua-report-app.html || true
+                        # Hard CI/CD gate: the pipeline only proceeds if image is Compliant.
+                        grep -q "Image Is Compliant" aqua-report-app.html \
+                            || { echo "BLOCKED: the app image is non-compliant (or scan report missing compliance marker)"; exit 1; }
+                    '''
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'aqua-report-app.html,aqua-scan-app.err',
                                      allowEmptyArchive: true
                 }
             }
@@ -380,6 +508,55 @@ PY
             post {
                 always {
                     archiveArtifacts artifacts: 'trivy-report.txt,trivy-report.json,trivy-os-report.txt,trivy-scan.err',
+                                     allowEmptyArchive: true
+                }
+            }
+        }
+
+        stage('Trivy Scan (App)') {
+            // The app's gate. Two things make it simpler than the MCP's:
+            //
+            //   1. OS packages only. The app image has NO pip dependencies —
+            //      it is the Python standard library and three source files.
+            //      There is no library tree to report and, more importantly,
+            //      NO remediation stage: there is nothing to upgrade.
+            //   2. The base image carries an `apt-get upgrade` in its
+            //      Dockerfile, so the Debian package set is already patched
+            //      when the image is built. The gate proves it.
+            //
+            // CRITICAL is the gate, exactly like the MCP's OS gate.
+            steps {
+                sh '''
+                    set -u
+
+                    TRIVY_OS_RC=0
+                    podman run --rm --name app-trivy-os-${BUILD_NUMBER} \
+                        --network host --security-opt label=disable \
+                        -v /var/run/docker.sock:/var/run/docker.sock \
+                        -v trivy-cache:/root/.cache/trivy \
+                        -e TRIVY_DB_REPOSITORY=docker.io/aquasec/trivy-db:2 \
+                        ${TRIVY_IMAGE} \
+                        image --scanners vuln \
+                            --pkg-types os \
+                            --severity CRITICAL \
+                            --exit-code 1 \
+                            --format table \
+                            ${APP_FULL_IMAGE} > trivy-app-os-report.txt 2>&1 || TRIVY_OS_RC=$?
+
+                    cat trivy-app-os-report.txt
+                    echo "trivy (app, OS packages) exit code: ${TRIVY_OS_RC}"
+
+                    if [ "${TRIVY_OS_RC}" -ne 0 ]; then
+                        echo "BLOCKED: Trivy reported a CRITICAL OS vulnerability in the app image — see trivy-app-os-report.txt"
+                        exit 1
+                    fi
+
+                    echo "App scan done: no CRITICAL OS CVEs, and there are no library dependencies to remediate."
+                '''
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'trivy-app-os-report.txt',
                                      allowEmptyArchive: true
                 }
             }
@@ -563,28 +740,37 @@ PY
         }
 
         stage('Export Artifact') {
-            // The artifact travels as a tarball so the DR site never depends
-            // on the PROD registry. Both sites load this exact file.
+            // The artifacts travel as tarballs so the DR site never depends
+            // on the PROD registry. Both sites load these exact files.
+            //
+            // TWO artifacts, ONE version: the inspector and the workload that
+            // is moved by the drill travel together, so a release is always
+            // the pair.
             steps {
                 sh '''
                     set -eux
-                    podman save ${FULL_IMAGE} | gzip > ${ARTIFACT}
-                    sha256sum ${ARTIFACT} | tee ${ARTIFACT}.sha256
-                    ls -lh ${ARTIFACT}
+                    podman save ${FULL_IMAGE}     | gzip > ${ARTIFACT}
+                    podman save ${APP_FULL_IMAGE} | gzip > ${APP_ARTIFACT}
+                    sha256sum ${ARTIFACT} ${APP_ARTIFACT} | tee ${ARTIFACT}.sha256
+                    ls -lh ${ARTIFACT} ${APP_ARTIFACT}
                 '''
             }
             post {
                 always {
-                    archiveArtifacts artifacts: "${env.ARTIFACT},${env.ARTIFACT}.sha256",
+                    archiveArtifacts artifacts: "${env.ARTIFACT},${env.ARTIFACT}.sha256,${env.APP_ARTIFACT}",
                                      allowEmptyArchive: true
                 }
             }
         }
 
         stage('Ansible Deploy') {
-            // The SAME tarball is copied to .105 and .104. Each site loads it
-            // into its own rootless podman store and runs it as a systemd USER
-            // unit — no root, no sudo password, no shared filesystem.
+            // The SAME tarballs are copied to .105 and .104. Each site loads
+            // them into its own rootless podman store and runs them as systemd
+            // USER units — no root, no sudo password, no shared filesystem.
+            //
+            // Two artifacts, two roles: `mcp` and `rolltable`. site.yml plays
+            // both roles on both sites, so the MCP and the app it serves are
+            // deployed from the same release.
             steps {
                 sh '''
                     set -eux
@@ -598,7 +784,9 @@ PY
                         -i inventory.ini \
                         site.yml \
                         -e mcp_image=${FULL_IMAGE} \
-                        -e mcp_artifact=${WORKSPACE}/${ARTIFACT}
+                        -e mcp_artifact=${WORKSPACE}/${ARTIFACT} \
+                        -e rolltable_image=${APP_FULL_IMAGE} \
+                        -e rolltable_artifact=${WORKSPACE}/${APP_ARTIFACT}
                 '''
             }
         }
@@ -632,6 +820,31 @@ PY
 
                     if [ "${VERIFY_RC}" -ne 0 ]; then
                         echo "BLOCKED: the PROD endpoint did not answer as ${PROD_EXPECT}"
+                        exit 1
+                    fi
+                    echo "" | tee -a failover-transcript.txt
+
+                    # ---- the app, end to end --------------------------------
+                    # The page asks its OWN MCP which site it is talking to,
+                    # and the MCP answers with the hostname of the host that
+                    # is serving the page. So this is the full chain:
+                    #     page -> MCP -> host
+                    # If the page reports the PROD hostname, the same app
+                    # image is serving on the PROD site. The script runs
+                    # INSIDE the app image, so it tests the shipped artifact.
+                    APP_VERIFY_RC=0
+                    podman run -i --rm --name app-verify-${BUILD_NUMBER} \
+                        --pull=never --network host --security-opt label=disable \
+                        --entrypoint python \
+                        ${APP_FULL_IMAGE} \
+                        - --url http://${PROD_HOST}:${APP_PORT}/api/mcp/status \
+                           --expect ${PROD_EXPECT} \
+                           --role PROD \
+                           --peer DR \
+                        < scripts/app_verify.py 2>&1 | tee -a failover-transcript.txt || APP_VERIFY_RC=$?
+
+                    if [ "${APP_VERIFY_RC}" -ne 0 ]; then
+                        echo "BLOCKED: the app on PROD did not report ${PROD_EXPECT}"
                         exit 1
                     fi
                     echo "" | tee -a failover-transcript.txt
@@ -711,6 +924,26 @@ PY
                         exit 1
                     fi
                     echo "" | tee -a failover-transcript.txt
+
+                    # The page must be serving from DR now, and it must say so.
+                    # The PROD tile on the page turns into "connection refused"
+                    # — that is the peer tile reporting the site that went away.
+                    APP_VERIFY_RC=0
+                    podman run -i --rm --name app-verify-dr-${BUILD_NUMBER} \
+                        --pull=never --network host --security-opt label=disable \
+                        --entrypoint python \
+                        ${APP_FULL_IMAGE} \
+                        - --url http://${DR_HOST}:${APP_PORT}/api/mcp/status \
+                           --expect ${DR_EXPECT} \
+                           --role DR \
+                           --peer PROD \
+                        < scripts/app_verify.py 2>&1 | tee -a failover-transcript.txt || APP_VERIFY_RC=$?
+
+                    if [ "${APP_VERIFY_RC}" -ne 0 ]; then
+                        echo "BLOCKED: after failover the app did not report ${DR_EXPECT} on the DR site"
+                        exit 1
+                    fi
+                    echo "" | tee -a failover-transcript.txt
                 '''
             }
         }
@@ -748,6 +981,24 @@ PY
                         exit 1
                     fi
                     echo "" | tee -a failover-transcript.txt
+
+                    # The page is back on PROD, reporting the PROD hostname.
+                    APP_VERIFY_RC=0
+                    podman run -i --rm --name app-verify-back-${BUILD_NUMBER} \
+                        --pull=never --network host --security-opt label=disable \
+                        --entrypoint python \
+                        ${APP_FULL_IMAGE} \
+                        - --url http://${PROD_HOST}:${APP_PORT}/api/mcp/status \
+                           --expect ${PROD_EXPECT} \
+                           --role PROD \
+                           --peer DR \
+                        < scripts/app_verify.py 2>&1 | tee -a failover-transcript.txt || APP_VERIFY_RC=$?
+
+                    if [ "${APP_VERIFY_RC}" -ne 0 ]; then
+                        echo "BLOCKED: after failback the app did not report ${PROD_EXPECT} on the PROD site"
+                        exit 1
+                    fi
+                    echo "" | tee -a failover-transcript.txt
                 '''
             }
         }
@@ -756,24 +1007,23 @@ PY
     post {
         always {
             sh '''
-                # FULL_IMAGE is empty when 'Resolve Version' never ran, so guard
-                # every use of it.
-                if [ -z "${FULL_IMAGE}" ]; then
-                    echo "Image references unresolved — skipping cleanup"
-                    exit 0
-                fi
-
                 # Remove the sidecar containers this build started. They all
                 # run with --rm, but a FAILED run can leave one behind.
+                # BUILD_NUMBER is always set, so this list needs no guard.
                 podman rm -f aqua-scan-${BUILD_NUMBER} \
+                             aqua-scan-app-${BUILD_NUMBER} \
                              mcp-trivy-${BUILD_NUMBER} \
                              mcp-trivy-os-${BUILD_NUMBER} \
                              mcp-trivy-final-${BUILD_NUMBER} \
                              mcp-trivy-final-os-${BUILD_NUMBER} \
+                             app-trivy-os-${BUILD_NUMBER} \
                              mcp-piplist-${BUILD_NUMBER} \
                              mcp-verify-${BUILD_NUMBER} \
                              mcp-verify-dr-${BUILD_NUMBER} \
-                             mcp-verify-back-${BUILD_NUMBER} 2>/dev/null || true
+                             mcp-verify-back-${BUILD_NUMBER} \
+                             app-verify-${BUILD_NUMBER} \
+                             app-verify-dr-${BUILD_NUMBER} \
+                             app-verify-back-${BUILD_NUMBER} 2>/dev/null || true
 
                 # Deliberately NOT --force: if a container is still running
                 # from ${FULL_IMAGE}, rmi correctly refuses and the image
@@ -783,27 +1033,49 @@ PY
                 # re-pointed at REMEDIATED_IMAGE by the Security Remediation
                 # stage, so without it the upstream build would be left behind
                 # as a dangling <none> layer on the host.
-                podman rmi ${FULL_IMAGE} ${REMEDIATED_IMAGE} ${BASE_IMAGE} 2>/dev/null || true
+                #
+                # FULL_IMAGE is empty when 'Resolve Version' never ran, so
+                # every image reference is guarded on its own.
+                if [ -n "${FULL_IMAGE}" ]; then
+                    podman rmi ${FULL_IMAGE} ${REMEDIATED_IMAGE} ${BASE_IMAGE} 2>/dev/null || true
+                else
+                    echo "MCP image references unresolved — skipping their cleanup"
+                fi
+
+                # The app image is independent of the MCP's remediation chain,
+                # so it gets its own guard.
+                if [ -n "${APP_FULL_IMAGE}" ]; then
+                    podman rmi ${APP_FULL_IMAGE} 2>/dev/null || true
+                else
+                    echo "App image reference unresolved — skipping its cleanup"
+                fi
             '''
 
             archiveArtifacts artifacts: 'failover-transcript.txt,ansible.log',
                              allowEmptyArchive: true
         }
         success {
-            echo "Pipeline SUCCESS — ${env.FULL_IMAGE} deployed to PROD and DR; failover and failback verified."
+            echo "Pipeline SUCCESS — ${env.FULL_IMAGE} + ${env.APP_FULL_IMAGE} deployed to PROD and DR; failover and failback verified."
             emailext (
-                subject: "✅ Build #${BUILD_NUMBER} PASSED — ${env.FULL_IMAGE} (PROD/DR MCP)",
+                subject: "✅ Build #${BUILD_NUMBER} PASSED — ${env.FULL_IMAGE} + ${env.APP_FULL_IMAGE} (PROD/DR MCP)",
                 body: """<h2>PROD/DR MCP Pipeline — Build #${BUILD_NUMBER} PASSED</h2>
-                    <p>Image: <code>${env.FULL_IMAGE}</code><br>
+                    <p><b>Artifact A — the inspector (MCP)</b><br>
+                       Image: <code>${env.FULL_IMAGE}</code><br>
                        Artifact: <code>${env.ARTIFACT}</code></p>
-                    <p>Aqua image scan: <b>Image Is Compliant</b><br>
-                       Trivy on the shipped image: no HIGH/CRITICAL library CVEs, no CRITICAL OS CVEs<br>
+                    <p><b>Artifact B — the workload (Lunch Rolltable app)</b><br>
+                       Image: <code>${env.APP_FULL_IMAGE}</code><br>
+                       Artifact: <code>${env.APP_ARTIFACT}</code></p>
+                    <p>Aqua image scans: <b>Image Is Compliant</b> (both images)<br>
+                       Trivy on the shipped MCP image: no HIGH/CRITICAL library CVEs, no CRITICAL OS CVEs<br>
+                       Trivy on the shipped app image: no CRITICAL OS CVEs (the app has no library dependencies)<br>
                        Security remediation: the upstream Python dependencies were upgraded
                        to their fixed versions and pip was removed from the runtime venv</p>
-                    <p>Deployed to: PROD <code>${env.PROD_HOST}</code> and DR <code>${env.DR_HOST}</code> — same artifact, both sites</p>
-                    <p>Failover drill: PROD stopped → DR answered as <code>${env.DR_EXPECT}</code><br>
-                       Failback: PROD restored → answered as <code>${env.PROD_EXPECT}</code></p>
-                    <p>Reports: <a href=\"${BUILD_URL}artifact/\">aqua-report.html, trivy-report.txt, trivy-final-report.txt, cve-fixes.txt, failover-transcript.txt</a><br>
+                    <p>Deployed to: PROD <code>${env.PROD_HOST}</code> and DR <code>${env.DR_HOST}</code> — same artifacts, both sites</p>
+                    <p>Failover drill: PROD stopped → DR answered as <code>${env.DR_EXPECT}</code>,
+                       and the app on <code>${env.DR_HOST}:${env.APP_PORT}</code> reported <code>${env.DR_EXPECT}</code><br>
+                       Failback: PROD restored → answered as <code>${env.PROD_EXPECT}</code>,
+                       and the app on <code>${env.PROD_HOST}:${env.APP_PORT}</code> reported <code>${env.PROD_EXPECT}</code></p>
+                    <p>Reports: <a href=\"${BUILD_URL}artifact/\">aqua-report.html, aqua-report-app.html, trivy-report.txt, trivy-final-report.txt, trivy-app-os-report.txt, cve-fixes.txt, failover-transcript.txt</a><br>
                        Console: <a href=\"${BUILD_URL}console\">build console</a><br>
                        Build: <a href=\"${BUILD_URL}\">#${BUILD_NUMBER}</a></p>
                 """,
@@ -816,9 +1088,10 @@ PY
             emailext (
                 subject: "❌ Build #${BUILD_NUMBER} FAILED — PROD/DR MCP",
                 body: """<h2>PROD/DR MCP Pipeline — Build #${BUILD_NUMBER} FAILED</h2>
-                    <p>Image: <code>${env.FULL_IMAGE ?: 'unresolved'}</code></p>
+                    <p>MCP image: <code>${env.FULL_IMAGE ?: 'unresolved'}</code><br>
+                       App image: <code>${env.APP_FULL_IMAGE ?: 'unresolved'}</code></p>
                     <p>Check the console for the failure stage.</p>
-                    <p>Reports: <a href=\"${BUILD_URL}artifact/\">aqua-report.html, trivy-report.txt, trivy-os-report.txt, failover-transcript.txt</a><br>
+                    <p>Reports: <a href=\"${BUILD_URL}artifact/\">aqua-report.html, aqua-report-app.html, trivy-report.txt, trivy-os-report.txt, trivy-app-os-report.txt, failover-transcript.txt</a><br>
                        Console: <a href=\"${BUILD_URL}console\">build console</a><br>
                        Build: <a href=\"${BUILD_URL}\">#${BUILD_NUMBER}</a></p>
                 """,

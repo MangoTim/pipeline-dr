@@ -1,0 +1,115 @@
+---
+# Deploy the Lunch Rolltable app onto one site.
+#
+# Design notes:
+#   * No `become`, no root — the same house rule as the MCP role. Each site is
+#     driven as its own non-root user with rootless podman.
+#   * The SAME tarball is copied to every site, so both sites serve the same
+#     bytes. The DR site never depends on the PROD registry.
+#   * A `restart`, not `enable --now`: `enable --now` is a NO-OP when the unit
+#     is already active, so the container would keep running the PREVIOUS
+#     image even though the new one was just loaded into the site's store.
+#   * The app never gets the SSH key. It asks the site's own MCP over the
+#     loopback, and the MCP is the only privileged component.
+#   * The unit declares a dependency on the MCP unit, so the page's panel
+#     has a working MCP as soon as the page is up.
+
+- name: Copy the built image to the site
+  ansible.builtin.copy:
+    src: "{{ rolltable_artifact }}"
+    dest: "{{ ansible_user_dir }}/{{ rolltable_artifact_remote }}"
+    mode: "0644"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+
+- name: Load the image into the site's rootless podman store
+  ansible.builtin.command:
+    cmd: podman load --input {{ ansible_user_dir }}/{{ rolltable_artifact_remote }}
+  register: rolltable_image_load
+  changed_when: "'Loaded image' in rolltable_image_load.stdout"
+
+- name: Remove the image tarball (it is now in the local image store)
+  ansible.builtin.file:
+    path: "{{ ansible_user_dir }}/{{ rolltable_artifact_remote }}"
+    state: absent
+
+- name: Ensure the systemd user unit directory exists
+  ansible.builtin.file:
+    path: "{{ ansible_user_dir }}/.config/systemd/user"
+    state: directory
+    mode: "0755"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+
+- name: Install the systemd user unit
+  ansible.builtin.template:
+    src: rolltable.service.j2
+    dest: "{{ ansible_user_dir }}/.config/systemd/user/{{ rolltable_service_name }}"
+    mode: "0644"
+
+- name: Reload the user systemd manager
+  ansible.builtin.command:
+    cmd: systemctl --user daemon-reload
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid | default(1001) }}"
+
+- name: Enable the rolltable service
+  ansible.builtin.command:
+    cmd: systemctl --user enable {{ rolltable_service_name }}
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid | default(1001) }}"
+  changed_when: false
+
+- name: Restart the rolltable service
+  ansible.builtin.command:
+    cmd: systemctl --user restart {{ rolltable_service_name }}
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid | default(1001) }}"
+  register: rolltable_service_start
+  changed_when: true
+
+- name: Wait for the page to accept connections
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ rolltable_port }}"
+    timeout: "{{ rolltable_readiness_seconds }}"
+    state: started
+
+- name: List the app images on the site
+  # The Go template placeholders are wrapped in {% raw %} so Ansible's own
+  # templating does not try to resolve "{{.Repository}}" as a variable.
+  ansible.builtin.command:
+    cmd: >-
+      podman images --format '{% raw %}{{.Repository}}:{{.Tag}}{% endraw %}'
+  register: rolltable_local_images
+  changed_when: false
+
+- name: Remove the superseded app images
+  # Only the image this deployment just rolled out is kept. Without this, a
+  # site that is deployed to many times accumulates one image per build.
+  # The old image can only be removed once the container using it is gone,
+  # which is why this runs after the restart above.
+  ansible.builtin.command:
+    cmd: podman rmi {{ item }}
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid | default(1001) }}"
+  loop: >-
+    {{ rolltable_local_images.stdout_lines
+       | difference([rolltable_image_ref])
+       | select('search', '^' ~ rolltable_image_repo ~ '[:\-]')
+       | list }}
+  loop_control:
+    label: "{{ item }}"
+  # rmi refuses to remove an image that a running container still uses; that
+  # is the safe outcome, not an error.
+  failed_when: false
+  changed_when: "'Deleted:' in (item.stdout | default(''))"
+
+- name: Report what was deployed
+  ansible.builtin.debug:
+    msg:
+      - "site            : {{ rolltable_site_role }} ({{ inventory_hostname }})"
+      - "image           : {{ rolltable_image }}"
+      - "page            : http://{{ inventory_hostname }}:{{ rolltable_port }}/"
+      - "MCP (local)     : http://{{ rolltable_mcp_host }}:{{ rolltable_mcp_port }}{{ rolltable_mcp_path }}"
+      - "MCP (peer)      : http://{{ rolltable_peer_host }}:{{ rolltable_mcp_port }}{{ rolltable_mcp_path }}"
