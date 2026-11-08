@@ -25,6 +25,21 @@
 // endpoint answers.
 // ===========================================================================
 
+// The artifact that is deployed right now, as the first stage resolved it.
+//
+// The name travels through a FILE, not through an env var: the Groovy
+// sandbox will not let a script set an env var under a name it computes at
+// runtime (env[key] = value is rejected), and the notification is the only
+// thing that needs the name — the stages themselves read it from the state
+// file the shell wrote.
+def deployedImage() {
+    def f = "${env.WORKSPACE}/deployed-image.txt"
+    if (fileExists(f)) {
+        return readFile(file: f).trim()
+    }
+    return 'unresolved'
+}
+
 pipeline {
     agent any
 
@@ -89,20 +104,13 @@ pipeline {
                     fi
 
                     drill_state_save "DEPLOYED_IMAGE=${IMAGE}" "DEPLOYED_APP_IMAGE=${APP}"
-                '''
 
-                // Publish the resolved artifact to the job, so the
-                // notification can name it.
-                script {
-                    if (fileExists("${env.WORKSPACE}/.drill-state.env")) {
-                        readFile(file: "${env.WORKSPACE}/.drill-state.env").eachLine { line ->
-                            def parts = line.split('=', 2)
-                            if (parts.length == 2) {
-                                env[parts[0]] = parts[1]
-                            }
-                        }
-                    }
-                }
+                    # The notification names the artifact. It is written as a
+                    # plain file, because the Groovy sandbox will not let a
+                    # script set an env var under a name it computes at
+                    # runtime.
+                    printf '%s' "${IMAGE}" > "${WORKSPACE}/deployed-image.txt"
+                '''
             }
         }
 
@@ -189,35 +197,41 @@ pipeline {
                              allowEmptyArchive: true
         }
         success {
-            emailext (
-                subject: "✅ FAILBACK — PROD is serving (build #${BUILD_NUMBER})",
-                body: """<h2>PROD/DR drill — failback</h2>
-                    <p>Artifact: <code>${env.DEPLOYED_IMAGE}</code> (already deployed — this job does not build)</p>
-                    <p>The DR site <code>${env.DR_HOST}</code> was stopped and PROD
-                       <code>${env.PROD_HOST}</code> was restored. The MCP answered as
-                       <code>${env.PROD_EXPECT}</code>.</p>
-                    <p>Posture: PROD live, DR stopped and ready to take over.</p>
-                    <p>Transcript: <a href="${BUILD_URL}artifact/">drill-transcript.txt</a><br>
-                       Console: <a href="${BUILD_URL}console">build console</a></p>
-                """,
-                mimeType: 'text/html',
-                to: 'tim.wong@systex.com.hk'
-            )
+            script {
+                def deployed = deployedImage()
+                emailext (
+                    subject: "✅ FAILBACK — PROD is serving (build #${BUILD_NUMBER})",
+                    body: """<h2>PROD/DR drill — failback</h2>
+                        <p>Artifact: <code>${deployed}</code> (already deployed — this job does not build)</p>
+                        <p>The DR site <code>${env.DR_HOST}</code> was stopped and PROD
+                           <code>${env.PROD_HOST}</code> was restored. The MCP answered as
+                           <code>${env.PROD_EXPECT}</code>.</p>
+                        <p>Posture: PROD live, DR stopped and ready to take over.</p>
+                        <p>Transcript: <a href="${BUILD_URL}artifact/">drill-transcript.txt</a><br>
+                           Console: <a href="${BUILD_URL}console">build console</a></p>
+                    """,
+                    mimeType: 'text/html',
+                    to: 'tim.wong@systex.com.hk'
+                )
+            }
         }
         failure {
-            emailext (
-                subject: "❌ FAILBACK failed — PROD/DR drill (build #${BUILD_NUMBER})",
-                body: """<h2>PROD/DR drill — failback FAILED</h2>
-                    <p>Artifact: <code>${env.DEPLOYED_IMAGE ?: 'unresolved'}</code></p>
-                    <p>The PROD site was not confirmed as serving. Check the console for
-                       the failing stage and run <b>mcp-failback</b> again.</p>
-                    <p>Transcript: <a href="${BUILD_URL}artifact/">drill-transcript.txt</a><br>
-                       Console: <a href="${BUILD_URL}console">build console</a></p>
-                """,
-                mimeType: 'text/html',
-                attachLog: true,
-                to: 'tim.wong@systex.com.hk'
-            )
+            script {
+                def deployed = deployedImage()
+                emailext (
+                    subject: "❌ FAILBACK failed — PROD/DR drill (build #${BUILD_NUMBER})",
+                    body: """<h2>PROD/DR drill — failback FAILED</h2>
+                        <p>Artifact: <code>${deployed}</code></p>
+                        <p>The PROD site was not confirmed as serving. Check the console for
+                           the failing stage and run <b>mcp-failback</b> again.</p>
+                        <p>Transcript: <a href="${BUILD_URL}artifact/">drill-transcript.txt</a><br>
+                           Console: <a href="${BUILD_URL}console">build console</a></p>
+                    """,
+                    mimeType: 'text/html',
+                    attachLog: true,
+                    to: 'tim.wong@systex.com.hk'
+                )
+            }
         }
     }
 }
