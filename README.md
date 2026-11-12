@@ -145,18 +145,25 @@ products/mcp-dr-pipeline/
 │   ├── trivy_cve_packages.py     # Trivy JSON -> pip upgrade list
 │   └── install-jenkins-tools.sh  # ansible + python3 into the Jenkins container
 └── docs/
-    ├── build_guide.py            # builds PROD-DR-MCP-Pipeline-Guide.docx
-    ├── build_cheatsheet.py       # builds PROD-DR-MCP-Pipeline-Cheatsheet.docx
-    ├── build_diagrams.py         # renders the pipeline + drill pictures
-    ├── build_uml.py              # renders the UML sequence + activity diagrams
-    ├── PROD-DR-Pipeline-Diagram.png   # the pipeline, with the command per stage
-    ├── PROD-DR-Drill-Diagram.png      # the drill, with the command per move
-    ├── PROD-DR-Sequence-Diagram.png   # the drill, as a UML sequence diagram
-    ├── PROD-DR-Activity-Diagram.png   # the workflow, as a UML activity diagram
-    ├── PROD-DR-MCP-Pipeline-Guide.docx      # the full walkthrough
-    ├── PROD-DR-MCP-Pipeline-Cheatsheet.docx  # the fast one: what each step is
+    ├── README.md                 # what is in here, and which folder for what
+    ├── guide/                    # the two DOCX walkthroughs
+    │   ├── build_guide.py            # builds PROD-DR-MCP-Pipeline-Guide.docx
+    │   ├── build_cheatsheet.py       # builds PROD-DR-MCP-Pipeline-Cheatsheet.docx
+    │   ├── PROD-DR-MCP-Pipeline-Guide.docx      # the full walkthrough
+    │   └── PROD-DR-MCP-Pipeline-Cheatsheet.docx  # the fast one: what each step is
     │                                          # for, and which you can skip
-    └── diagram-*.html, uml-*.html  # the source of the four diagrams
+    └── diagrams/
+        ├── pipeline/              # the pictures of the pipeline itself
+        │   ├── build_diagrams.py     # renders the pipeline + drill pictures
+        │   ├── PROD-DR-Pipeline-Diagram.png   # the pipeline, command per stage
+        │   ├── PROD-DR-Drill-Diagram.png      # the drill, command per move
+        │   ├── reference-redhat-pipeline.png # the Red Hat reference this mirrors
+        │   └── diagram-*.html        # the source of those three
+        └── uml/                   # the pictures drawn as UML
+            ├── build_uml.py          # renders the UML sequence + activity diagrams
+            ├── PROD-DR-Sequence-Diagram.png   # the drill, as a sequence diagram
+            ├── PROD-DR-Activity-Diagram.png   # the workflow, as an activity diagram
+            └── uml-*.html            # the source of those two
 ```
 
 ---
@@ -336,7 +343,7 @@ wildcard rule.
 
 ### The whole workflow, as an activity diagram
 
-![The pipeline as a UML activity diagram](docs/PROD-DR-Activity-Diagram.png)
+![The pipeline as a UML activity diagram](docs/diagrams/uml/PROD-DR-Activity-Diagram.png)
 
 The two **diamonds** are the two gates. Everything above the fork happens
 once, on `.105`; the fork is where the single tarball goes to both sites;
@@ -345,7 +352,7 @@ nothing is deployed, and production keeps serving.
 
 ### The pipeline: build once, deploy the same bytes to both sites
 
-![The PROD/DR pipeline — one image, built and scanned once, deployed to both sites](docs/PROD-DR-Pipeline-Diagram.png)
+![The PROD/DR pipeline — one image, built and scanned once, deployed to both sites](docs/diagrams/pipeline/PROD-DR-Pipeline-Diagram.png)
 
 ```
   ┌──────────── .105  PROD  (control plane) ─────────────┐
@@ -421,7 +428,7 @@ script of its own in `manual/` (`step-00` … `step-13`) for the by-hand run.
 
 ### The drill: five moves, production never at risk until move ④
 
-![The failover drill — five moves, with the command behind each one](docs/PROD-DR-Drill-Diagram.png)
+![The failover drill — five moves, with the command behind each one](docs/diagrams/pipeline/PROD-DR-Drill-Diagram.png)
 
 ```
   move   PROD .105                            DR .104
@@ -464,7 +471,7 @@ move as one pair.
 
 ### The same drill, as a sequence diagram
 
-![The failover drill as a UML sequence diagram](docs/PROD-DR-Sequence-Diagram.png)
+![The failover drill as a UML sequence diagram](docs/diagrams/uml/PROD-DR-Sequence-Diagram.png)
 
 Four lifelines — your client, Jenkins, the PROD MCP and the DR MCP. The
 message that matters is the red one: after the cutover the client still asks
@@ -757,6 +764,49 @@ podman run -i --rm --network host --entrypoint python \
        --expect server-gateway.example.com --role PROD --peer DR \
     < ../scripts/app_verify.py
 ```
+
+---
+
+## The next stage: UAT in front of PROD
+
+The picture below is the **design** for the shape the HKU ENGG Intranet
+pipeline takes: GitLab is the SCM, the image is built and scanned once, UAT
+gets it first, and a human approves before production does.
+
+(The PROD ⇄ DR half of *this* repo is untouched by it — this picture is the
+UAT → PROD part on its own.)
+
+> **The implementation of that stage lives in its own repository** —
+> `MangoTim/pipeline-uat` (locally `products/Demo_hku/pipeline-uat/`). The
+> picture, its source and the whole UAT → approval → PROD pipeline moved
+> there, because it is the intranet's pipeline and not this project's. This
+> repo keeps the PROD ⇄ DR drill.
+
+The picture, and what it says:
+
+- **The SCM is GitHub, one repository for the pipeline.** `MangoTim/pipeline-uat`
+  holds the `Jenkinsfile`, the Ansible roles and the docs; the application
+  itself stays in `MangoTim/hku-calendar` and is fetched by the pipeline at
+  build time.
+- **The image is built and scanned once.** Podman builds it, it is pushed to
+  the registry on `.104` (the CI host), and the Aqua image scan and the code
+  scan (bun audit + Trivy) both gate the build. The registry is what both
+  sites pull from, so UAT and PROD run byte-identical content.
+- **A UAT environment is added in front of production.** A container on
+  `.104`, on port 8097, against its **own database** (`engg_intranet_uat`) — a
+  separate environment, not a second view of production. The gate is a
+  **manual approval**: a human releases the promotion, and *Reject* means
+  nothing reaches PROD.
+- **One PostgreSQL server, two databases.** The psql both environments talk
+  to lives on `.103` — `192.168.147.103:5432`. PROD uses `engg_intranet` with
+  the role `engg_prod`; UAT uses `engg_intranet_uat` with the role
+  `engg_uat`. Same server, separate data sets, and separate roles so UAT
+  cannot open the production database at all. There is no separate "deploy
+  the database" step — the schema is created with `IF NOT EXISTS` by the
+  application itself.
+- **PROD → DR → PROD is unchanged.** Failover and failback already work and
+  stay what they are: real moves of the running service, with the DR
+  readiness gate deciding whether the standby may be promoted at all.
 
 ---
 

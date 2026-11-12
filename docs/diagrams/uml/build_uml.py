@@ -1,6 +1,6 @@
 """Render the PROD/DR workflow as two UML diagrams.
 
-    python docs/build_uml.py
+    python docs/diagrams/uml/build_uml.py
 
 Writes, next to this script:
 
@@ -11,10 +11,10 @@ Writes, next to this script:
 
 There is no PlantUML on this machine, so the diagrams are drawn as SVG and
 screenshot the same way the other two are — through headless Chrome, at 2x
-scale. The house style comes from build_diagrams.py.
+scale. The house style comes from build_diagrams.py, one folder up.
 
-    python docs/build_uml.py          # render everything
-    python docs/build_uml.py --html   # write the HTML only, do not render
+    python docs/diagrams/uml/build_uml.py          # render everything
+    python docs/diagrams/uml/build_uml.py --html   # write the HTML only
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent / "pipeline"))
 
 # Reuse the house style rather than duplicating it.
 from build_diagrams import BASE_CSS, COLORS, render  # noqa: E402

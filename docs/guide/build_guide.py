@@ -3,7 +3,7 @@
 The PROD/DR MCP pipeline walkthrough: every manual step, how it works, what
 it must print, and what the MCP contributes to each one.
 
-    python docs/build_guide.py
+    python docs/guide/build_guide.py
 
 Writes PROD-DR-MCP-Pipeline-Guide.docx next to this script. Re-runnable: it
 always overwrites the output.
@@ -21,6 +21,20 @@ from docx.shared import Cm, Inches, Pt, RGBColor
 
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "PROD-DR-MCP-Pipeline-Guide.docx"
+
+# The rendered diagrams live one level up, split by kind. The guide embeds
+# pictures from both folders, so the lookup searches both.
+DIAGRAMS = HERE.parent / "diagrams"
+DIAGRAM_FOLDERS = (DIAGRAMS / "pipeline", DIAGRAMS / "uml")
+
+
+def find_diagram(filename: str) -> Path:
+    """The rendered PNG with this name, whichever diagram folder holds it."""
+    for folder in DIAGRAM_FOLDERS:
+        path = folder / filename
+        if path.exists():
+            return path
+    return DIAGRAM_FOLDERS[0] / filename
 
 BLUE = RGBColor(0x0B, 0x3D, 0x91)
 INK = RGBColor(0x1A, 0x1A, 0x1A)
@@ -200,10 +214,11 @@ def callout(doc, label: str, text: str, kind: str = "info") -> None:
 def picture(doc, filename: str, caption: str | None = None,
             width: float = 6.6) -> None:
     """Drop in a rendered diagram PNG, scaled to the text column."""
-    path = HERE / filename
+    path = find_diagram(filename)
     if not path.exists():
         raise SystemExit(
-            f"{filename} is missing — run `python docs/build_diagrams.py` first")
+            f"{filename} is missing — run `python docs/diagrams/pipeline/"
+            f"build_diagrams.py` first")
     if caption:
         cap = doc.add_paragraph()
         cap.paragraph_format.space_before = Pt(4)

@@ -4,7 +4,7 @@ The fast version of the guide: one line per step (what it is for) plus the
 command that step actually runs. Ends with a command sheet you can present
 from.
 
-    python docs/build_cheatsheet.py
+    python docs/guide/build_cheatsheet.py
 
 Writes PROD-DR-MCP-Pipeline-Cheatsheet.docx next to this script. Re-runnable.
 """

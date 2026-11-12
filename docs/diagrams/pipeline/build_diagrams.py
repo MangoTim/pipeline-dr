@@ -1,6 +1,6 @@
 """Render the pipeline and the PROD/DR drill as PNG diagrams.
 
-    python docs/build_diagrams.py
+    python docs/diagrams/pipeline/build_diagrams.py
 
 Writes, next to this script:
 
@@ -16,8 +16,8 @@ PNG is what goes on a slide.
 The rendering uses headless Chrome at 2x device scale, so the PNG is crisp
 enough to read when it is projected.
 
-    python docs/build_diagrams.py          # render everything
-    python docs/build_diagrams.py --html   # write the HTML only, do not render
+    python docs/diagrams/pipeline/build_diagrams.py          # render everything
+    python docs/diagrams/pipeline/build_diagrams.py --html   # HTML only
 """
 
 from __future__ import annotations
