@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install the tools the mcp-dr-pipeline Jenkins job needs, INSIDE the Jenkins
-# container on 192.168.147.105.
+# container on 192.168.147.104 — the CI host, which sits with UAT.
 #
 # The jenkins-with-podman image is a slim Debian image that ships neither
 # python3 nor ansible. Both are needed:

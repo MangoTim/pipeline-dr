@@ -107,7 +107,10 @@ pipeline {
     agent any
 
     environment {
-        AQUA_HOST     = 'https://192.168.147.105'
+        // The Aqua console moved to 192.168.147.104 together with Jenkins
+        // and the registry: CI now sits with UAT, and PROD keeps only the
+        // live site.
+        AQUA_HOST     = 'https://192.168.147.104'
         SCANNER_IMAGE = 'registry.aquasec.com/scanner:2022.4.868'
         TRIVY_IMAGE   = 'docker.io/aquasec/trivy:0.76.1'
         AQUA_CREDS_ID = 'aqua-console'
